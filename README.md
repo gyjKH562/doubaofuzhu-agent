@@ -1,12 +1,12 @@
 # 自媒体文案生成工具（后端）
 
-> 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 4 步）
+> 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 5 步）
 
 基于 FastAPI 的文案生成工具后端：输入选题，生成公众号文章和小红书笔记。
 按"增量迭代"方式从零构建：每步只实现最小可用功能，先跑通原型再逐步加固。
 
-**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章写读接口（创建 / 单条查询 / 分页列表 / 关键词搜索）。
-**规划中**：更新删除（CRUD 闭环）→ 大模型集成（DeepSeek）→ 生成/改写接口 → 限流加固 → 自动化测试。
+**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构（main.py 装配 + routers 业务）。
+**规划中**：大模型集成（DeepSeek）→ 生成/改写接口 → 限流加固 → 自动化测试。
 
 ## 技术栈
 
@@ -18,6 +18,7 @@
 - cryptography 50.0.1 —— MySQL 8 默认认证方式所需
 - python-dotenv 1.2.3 —— 读取 .env 环境变量配置
 - MySQL 8.x —— 数据存储
+- Git —— 版本管理（每完成一步提交一次）
 
 ## 当前进度
 
@@ -25,7 +26,8 @@
 - [x] 第 2 步：数据库层（SQLAlchemy 2.0 异步引擎 / 会话依赖 / ORM 模型 / 启动自动建表）
 - [x] 第 3 步：写接口（POST 保存文章记录：请求/响应模型分离 + 写库三部曲 + 边界校验）
 - [x] 第 4 步：读接口（单条查询 404 / 分页 count+offset+limit / 关键词参数化搜索）
-- [ ] 后续：CRUD 闭环 → 大模型集成 → 生成/改写接口 → 异常处理 → 限流加固 → 自动化测试
+- [x] 第 5 步：更新 + 删除接口（CRUD 闭环）+ 第一次重构（抽 routers/article_router.py）
+- [ ] 后续：大模型集成 → 生成/改写接口 → 异常处理 → 限流加固 → 自动化测试
 
 ## 快速开始
 
@@ -38,7 +40,7 @@
 ### 1. 创建数据库
 
 ```bash
-mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS article_db CHARACTER SET utf8mb4"
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS article_db_tutorial CHARACTER SET utf8mb4"
 ```
 
 ### 2. 创建虚拟环境并安装依赖
@@ -53,7 +55,7 @@ pip install -r requirements.txt
 
 ```powershell
 Copy-Item .env.example .env
-# 然后用编辑器打开 .env，把 DATABASE_URL 里的密码改成你自己的 MySQL root 密码
+# 然后用编辑器打开 .env，把 DATABASE_URL 里的 <your_password> 改成你自己的 MySQL root 密码
 ```
 
 ### 4. 启动服务
@@ -68,7 +70,7 @@ python main.py
 
 - 健康检查：浏览器打开 `http://127.0.0.1:8000/health` → 返回 `{"status":"ok"}`
 - 接口文档：浏览器打开 `http://127.0.0.1:8000/docs` → 看到 Swagger 页面，可直接点 "Try it out" 调接口
-- 建表确认：`mysql -u root -p article_db -e "SHOW TABLES;"` → 看到 `article_record`
+- 建表确认：`mysql -u root -p article_db_tutorial -e "SHOW TABLES;"` → 看到 `article_record`
 
 > 端口提示：本项目用 8000（`.env` 的 APP_PORT 控制）。曾实战遇到 8000 被本机其他程序占用，
 > 改 `.env` 的 APP_PORT 即可、无需改代码——这就是配置分离的意义；后续已改回 8000。
@@ -80,9 +82,30 @@ python main.py
 | GET | /health | 健康检查，探测服务是否存活 |
 | GET | / | 服务基本信息 |
 | GET | /docs | 自动生成的 Swagger 接口文档 |
-| POST | /api/article | 创建文章记录（topic 必填，≤120 字；gzh_article/xhs_note 可选） |
+| POST | /api/article | 创建文章记录（topic 必填，≤120 字；gzh_article/xhs_note 可选）→ 201 |
 | GET | /api/article/list | 列表分页 + 关键词搜索（page / page_size / keyword 参数） |
 | GET | /api/article/{article_id} | 按 id 查询单条（不存在返回 404） |
+| PUT | /api/article/{article_id} | 部分更新（只改传入字段，不传的保持不变） |
+| DELETE | /api/article/{article_id} | 按 id 删除（成功返回 204 无内容） |
+
+## 工程故事点（面试 / 作品集展示用）
+
+这些是本项目里"能讲出道理"的设计决策，每个都能展开聊 2~3 分钟：
+
+1. **为什么第 5 步才抽路由？——Rule of Three**
+   第 3、4 步接口少，抽路由是过度设计；到第 5 步接口满 5 个、`_get_article_or_404` 逻辑第 3 次出现，抽的收益才真正兑现。判断"何时重构"比"怎么重构"更值钱。
+2. **PUT 部分更新怎么实现？——exclude_unset 区分"没传"和"传了 null"**
+   `model_dump(exclude_unset=True)` 只取请求里显式出现的字段，实现"传什么改什么"；并识别出"传 null 置空 NOT NULL 列"这个坑，用 422 拦截。语义上更接近 PATCH，但实用主义优先。
+3. **DELETE 为什么返回 204 而不是 200？**
+   204 No Content = "删除成功但无内容可返回"，状态码本身传达语义，前端一行处理。
+4. **分页为什么查两次？**
+   `COUNT(*)` 拿总数 + `LIMIT/OFFSET` 拿当前页，MySQL 没有一体语法，这是业界标准做法；offset=(page-1)×page_size。
+5. **搜索为什么用 contains 而不是拼字符串？**
+   参数化查询防 SQL 注入——永远不用 f-string 拼 SQL。
+6. **密码为什么不进仓库？**
+   `.env` 进 .gitignore，`.env.example` 用占位符——真实配置和模板分离，密码永不进 git 历史。
+7. **git 每步一提交**
+   版本历史 = 学习轨迹，随时可回退对比。
 
 ## 配置项
 
@@ -90,21 +113,24 @@ python main.py
 |------|--------|------|
 | APP_HOST | 127.0.0.1 | 服务监听地址 |
 | APP_PORT | 8000 | 服务监听端口 |
-| DATABASE_URL | mysql+aiomysql://... | 异步 MySQL 连接串（库名 article_db，utf8mb4） |
+| DATABASE_URL | mysql+aiomysql://... | 异步 MySQL 连接串（库名 article_db_tutorial，utf8mb4） |
 
 ## 项目结构
 
 ```
 doubaofuzhuAgent-tutorial/
-├── main.py            # 应用入口：FastAPI 实例、lifespan 启动建表、文章写读接口
-├── database.py        # 数据库层：异步引擎 / 会话依赖 / ORM 模型 / 建表函数
+├── main.py                # 应用入口（装配）：FastAPI 实例、lifespan 建表、挂载路由
+├── database.py            # 数据库层：异步引擎 / 会话依赖 / ORM 模型 / 建表函数
+├── routers/
+│   ├── __init__.py        # 包标记
+│   └── article_router.py  # 文章域全部接口（CRUD，APIRouter 组织）
 ├── schemas/
-│   ├── __init__.py    # 包标记
-│   └── article_schemas.py  # 请求/响应模型（ArticleCreate / ArticleResp / ArticleListResp）
-├── requirements.txt   # 运行依赖（版本锁定）
-├── .env.example       # 配置模板（提交 git）
-├── .env               # 本地配置（不提交 git）
-└── .gitignore         # git 忽略规则
+│   ├── __init__.py        # 包标记
+│   └── article_schemas.py # 请求/响应模型（Create/Resp/ListResp/Update）
+├── requirements.txt       # 运行依赖（版本锁定）
+├── .env.example           # 配置模板（提交 git，密码用占位符）
+├── .env                   # 本地配置（不提交 git）
+└── .gitignore             # git 忽略规则
 ```
 
 ## 开发路线图（Roadmap）
@@ -115,7 +141,7 @@ doubaofuzhuAgent-tutorial/
 2. ✅ 数据库层（异步 ORM + 自动建表）
 3. ✅ 写接口：POST 保存文章记录（先不接大模型）
 4. ✅ 读接口：单条查询 + 列表分页 + 关键词搜索
-5. ⬜ 更新 + 删除接口（CRUD 闭环）
+5. ✅ 更新 + 删除接口（CRUD 闭环）+ 抽路由重构
 6. ⬜ 集成大模型：aiohttp 调用 DeepSeek（超时 / 日志 / 错误处理）
 7. ⬜ 生成接口串联：缓存命中 + 调模型 + 写库
 8. ⬜ 文章改写接口（复用之道的实践）
@@ -133,3 +159,4 @@ doubaofuzhuAgent-tutorial/
 - 2026-09-08：第 2 步完成——SQLAlchemy 2.0 异步引擎、会话依赖注入、ArticleRecord ORM 模型、启动自动建表；补齐 MySQL 8 认证所需的 cryptography 依赖。
 - 2026-09-09：第 3 步完成——POST 写接口、请求/响应模型分离（schemas）、写库三部曲（add/commit/refresh + rollback）、边界校验；实战踩坑：Swagger 的 "Try it out" 会预填示例值，直接执行会把示例数据写进库（定位法：查库看实际存的 topic）。
 - 2026-09-09：第 4 步完成——读接口三件套：单条查询（scalar_one_or_none + 404）、分页（count + offset/limit，offset=(page-1)×page_size）、关键词搜索（contains 参数化防注入）；掌握路由声明顺序坑（静态路径必须声明在动态路径之前）与 Query 参数校验（ge/le/max_length）。
+- 2026-09-09：第 5 步完成——PUT 部分更新（exclude_unset 区分"没传"和"传了 null"，422 拦截置空）、DELETE 204 语义；第一次重构：抽 routers/article_router.py（Rule of Three）+ _get_article_or_404 复用函数；配齐 git 版本管理（init/add/commit/log，第一次提交 acdcee）；安全习惯：.env.example 密码改占位符，真实密码只留在 .env 且不进 git。

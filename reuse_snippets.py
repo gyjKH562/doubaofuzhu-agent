@@ -249,3 +249,83 @@ async def list_items(
 #   stmt = select(YourModel).where(*conditions)        # 列表展开为多个条件
 # ⚠ where() 至少需要一个条件；conditions 为空时必须跳过 where()（见模板 G）
 # ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 I：APIRouter 组织模板 —— FastAPI 项目标准分层方式
+# 适用：接口超过 3 个时，把业务接口从 main.py 抽到 routers/ 下
+# 使用：复制 → 改 prefix/tags/路径 → 把接口函数搬进来
+# ═══════════════════════════════════════════════════════════
+# routers/your_router.py
+#   from fastapi import APIRouter, Depends, HTTPException, Query, Response
+#   from sqlalchemy import func, select
+#   from sqlalchemy.ext.asyncio import AsyncSession
+#   from database import YourModel, get_db
+#   from schemas.your_schemas import ...
+#
+#   router = APIRouter(prefix="/api/your", tags=["你的域"])
+#
+#   @router.post("", response_model=..., status_code=201)
+#   async def create(...): ...
+#   # ... 更多接口 ...
+#
+# main.py 里只需两行接入：
+#   from routers.your_router import router as your_router
+#   app.include_router(your_router)
+#
+# 关键规则：
+#   - prefix 统一路径前缀：@router.post("") 实际是 POST /api/your
+#   - 静态路径（如 /list）必须声明在动态路径（如 /{id}）之前
+#   - main.py 只做"装配"：创建 app + include_router，不写业务
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 J：部分更新（PUT + exclude_unset + setattr）—— 所有更新接口通用
+# 适用：更新时"传什么改什么、没传的不动"，避免误清空字段
+# 使用：复制 → 改模型/字段 → 加你的业务校验
+# ═══════════════════════════════════════════════════════════
+# schemas 里的更新请求模型（全部字段可选）：
+#   class ItemUpdate(BaseModel):
+#       name: str | None = Field(None, min_length=1, max_length=50)
+#       remark: str | None = Field(None)
+#
+# 接口实现：
+#   @router.put("/{item_id}", response_model=ItemResp)
+#   async def update_item(item_id: int, req: ItemUpdate,
+#                         db: AsyncSession = Depends(get_db)):
+#       row = await _get_or_404(db, item_id)          # 先查存在性
+#       # 只取"请求里显式写了"的字段（灵魂：exclude_unset）
+#       update_data = req.model_dump(exclude_unset=True)
+#       # 业务校验：NOT NULL 列不能被置空（类型校验管不了 null）
+#       if "name" in update_data and update_data["name"] is None:
+#           raise HTTPException(status_code=422, detail="name 不能为空")
+#       for field, value in update_data.items():      # 逐字段写回
+#           setattr(row, field, value)
+#       await db.commit()
+#       await db.refresh(row)
+#       return row
+#
+# ⚠ 三个高频坑：忘记 exclude_unset（变全量清空）、
+#    NOT NULL 列传 null（500）、删除后 refresh（报错）
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 K：内部复用函数（Rule of Three）—— 查存在性逻辑第 3 次出现时抽
+# 适用：多个接口都要"按 id 查 + 不存在抛 404"
+# 使用：复制 → 改模型 → 放 router 文件顶部
+# ═══════════════════════════════════════════════════════════
+#   async def _get_or_404(db: AsyncSession, item_id: int) -> YourModel:
+#       """按 id 查记录，查不到直接抛 404。多个接口复用。"""
+#       stmt = select(YourModel).where(YourModel.id == item_id)
+#       result = await db.execute(stmt)
+#       row = result.scalar_one_or_none()  # 0 条→None；多条→报错（数据异常及早暴露）
+#       if row is None:
+#           raise HTTPException(status_code=404, detail="记录不存在")
+#       return row
+#
+# 命名约定：
+#   - 下划线开头 = 模块私有，只在本文件内部使用
+#   - 何时抽：同一逻辑出现第 3 次（Rule of Three）——第 1、2 次先忍
+# ═══════════════════════════════════════════════════════════
