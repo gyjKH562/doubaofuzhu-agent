@@ -5,3 +5,4 @@ python-dotenv==1.2.3
 sqlalchemy==2.0.52      # ORM 数据库操作（2.x 现代写法）
 aiomysql==0.3.2         # 异步 MySQL 驱动
 cryptography==50.0.1    # MySQL8 默认认证方式必需（见坑点 #3）
+openai==3.11.0          # 大模型官方 SDK（AsyncOpenAI 异步调用 DeepSeek）

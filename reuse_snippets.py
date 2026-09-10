@@ -329,3 +329,110 @@ async def list_items(
 #   - 下划线开头 = 模块私有，只在本文件内部使用
 #   - 何时抽：同一逻辑出现第 3 次（Rule of Three）——第 1、2 次先忍
 # ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 L：LLM 调用封装（OpenAI SDK 版）—— 接任何大模型项目的通用骨架
+# 适用：DeepSeek / 通义 / 智谱 / OpenAI 等兼容 OpenAI 协议的服务
+# 方案权衡（为什么用 SDK 而不是手写 aiohttp）：
+#   SDK 内置：重试(max_retries)、超时(Timeout)、连接池(单例)、异常分类
+#   手写 aiohttp 的价值：看懂 SDK 替你做了什么（HTTP 底层/异步原理）
+#   结论：原理懂了之后，生产代码用 SDK——少写几十行、少踩协议细节的坑
+# 使用：复制 → 改环境变量名/模型名 → 改你的业务参数
+# ═══════════════════════════════════════════════════════════
+# 需要补的 import / 环境变量：
+#   import openai
+#   from dotenv import load_dotenv
+#   .env 里：YOUR_API_KEY / YOUR_BASE_URL / YOUR_MODEL
+
+#   API_KEY = os.getenv("YOUR_API_KEY", "")
+#   BASE_URL = os.getenv("YOUR_BASE_URL", "https://api.deepseek.com")
+#   MODEL = os.getenv("YOUR_MODEL", "deepseek-chat")
+#
+#   class LLMError(Exception):
+#       """大模型调用失败的自定义异常，上层只认识它。"""
+#
+#   _client = None
+#
+#   def get_client() -> openai.AsyncOpenAI:
+#       """懒加载单例：AsyncOpenAI 内部有连接池，是"重对象"，只创建一次。"""
+#       global _client
+#       if _client is None:
+#           _client = openai.AsyncOpenAI(
+#               api_key=API_KEY,
+#               base_url=BASE_URL,
+#               timeout=openai.Timeout(120, connect=10),
+#               max_retries=2,   # SDK 内置重试
+#           )
+#       return _client
+#
+#   async def call_llm(messages: list[dict], max_tokens: int = 2000) -> str:
+#       if not API_KEY:
+#           raise LLMError("未配置 API_KEY")
+#       try:
+#           resp = await get_client().chat.completions.create(
+#               model=MODEL, messages=messages, max_tokens=max_tokens)
+#       except openai.AuthenticationError as e:      # 401 认证失败
+#           raise LLMError("API key 无效") from None
+#       except openai.APITimeoutError:               # 超时（必须先于连接错误）
+#           raise LLMError("调用超时，请稍后重试") from None
+#       except openai.APIConnectionError:            # 网络错误
+#           raise LLMError("网络错误，无法连接服务") from None
+#       except openai.APIStatusError as e:           # 429/500 等
+#           raise LLMError(f"接口返回 {e.status_code}") from None
+#       except openai.APIError:                      # 兜底
+#           raise LLMError("大模型调用失败") from None
+#       content = resp.choices[0].message.content
+#       if not content:                              # 思考模型可能返回空
+#           raise LLMError("大模型返回空内容")
+#       return content
+#
+# ⚠ 两个关键坑：
+#   1. APITimeoutError 必须写在 APIConnectionError 之前（超时是连接错误的子类）
+#   2. key 未配置时不要 import 阶段就崩——用懒加载 + call_llm 开局检查
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 M：自定义异常分类模式 —— 所有"调用外部服务"的封装通用
+# 适用：HTTP 服务 / 第三方 API / 数据库等外部依赖的失败信号
+# 思路：对外抛一个干净的领域异常（调用方只认识它），对内打完整日志
+# ═══════════════════════════════════════════════════════════
+#   class MyServiceError(Exception):
+#       """外部服务调用失败。上层 except MyServiceError 统一处理。"""
+#
+#   try:
+#       ...  # 调用外部服务
+#   except TimeoutError as e:
+#       logger.error("外部服务超时：%s", e)      # 完整原因进日志
+#       raise MyServiceError("外部服务超时") from None  # 干净信号给上层
+#   except ConnectionError as e:
+#       logger.error("外部服务连接失败：%s", e)
+#       raise MyServiceError("无法连接外部服务") from None
+#
+# 要点：
+#   - from None：丢弃原始异常链（日志已有原因，异常信息保持干净）
+#   - 分类粒度：让调用方知道"超时该重试 / 401 换 key / 网络查环境"
+#   - 统一的"未知错误"是排查地狱——错误必须分得出类别
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 N：懒加载单例模式 —— 重对象只创建一次
+# 适用：连接池 / HTTP 客户端 / 数据库客户端等"贵"且可复用的对象
+# 对比：每次调用新建 = 每次都付全价；全局单例 = 只付一次
+# ═══════════════════════════════════════════════════════════
+#   _client = None               # 模块级私有：存放单例
+#
+#   def get_client() -> SomeHeavyClient:
+#       """懒加载：第一次调用才真正创建（import 时不创建，避免副作用）。"""
+#       global _client
+#       if _client is None:
+#           _client = SomeHeavyClient(...)   # 真正的创建在这里
+#       return _client
+#
+# 为什么"懒"而不是模块加载时直接建：
+#   - 避免 import 阶段的副作用（如 key 未配置时 import 就崩）
+#   - 提高启动速度（用到了才创建）
+#   - 测试友好（可随时重置 _client = None 重新创建）
+# ═══════════════════════════════════════════════════════════
