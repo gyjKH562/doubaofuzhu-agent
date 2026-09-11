@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # 异步会话类型（类型�
 
 from database import ArticleRecord                 # ORM 模型：对应 article_record 表
 from services.llm_service import LLMError, call_llm  # 第 6 步的封装：调模型 + 错误分类
+from services.db_helpers import save_row
 
 logger = logging.getLogger(__name__)  # 本模块的日志器，__name__ = "services.generate_service"
 
@@ -113,14 +114,7 @@ async def generate_article(db: AsyncSession, topic: str) -> tuple[ArticleRecord,
         gzh_article=gzh_article,          # 生成的公众号文章
         xhs_note=xhs_note,                # 生成的小红书笔记
     )
-    db.add(db_row)                        # ① 加入会话（内存中的"待写入队列"）
-    try:
-        await db.commit()                 # ② 提交事务：真正写进数据库
-        await db.refresh(db_row)          # ③ 刷新：把数据库回填的 id/created_at 读回对象
-    except Exception as e:                # 写库失败
-        await db.rollback()               # 回滚：撤销这次会话里未完成的写入
-        logger.error("生成结果写库失败：%s: %s", type(e).__name__, str(e))
-        raise                             # 原样抛出，由 router 转 500
+    await save_row(db, db_row)
 
     logger.info("生成完成：id=%d topic=%s", db_row.id, topic)
     return db_row,False                         # 返回已落库的记录（含自增 id）

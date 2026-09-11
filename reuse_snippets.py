@@ -511,3 +511,59 @@ async def list_items(
 # 为什么 502 vs 500 要分清：
 #   运维看到 502 会查上游服务，看到 500 会查你的代码——错误归属影响排障方向
 # ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 R：写库统一入口 save_row —— SQLAlchemy 异步项目通用
+# 适用：所有增/改（写库三部曲：add → commit → refresh，失败回滚）
+# 边界：删除场景不要用（删除后 refresh 会报错）
+# ═══════════════════════════════════════════════════════════
+#   import logging
+#   from sqlalchemy.ext.asyncio import AsyncSession
+#   logger = logging.getLogger(__name__)
+#
+#   async def save_row(db: AsyncSession, row) -> None:
+#       """写库三部曲封装：add + commit + refresh，失败自动回滚。"""
+#       db.add(row)                # ① 登记（新建=INSERT；已持久化对象重复 add 幂等）
+#       try:
+#           await db.commit()      # ② 落库
+#           await db.refresh(row)  # ③ 重读权威值（id/时间戳）
+#       except Exception as e:
+#           await db.rollback()    # 失败回滚，不留半截数据
+#           logger.error("写库失败: %s: %s", type(e).__name__, str(e))
+#           raise                  # 原样抛出，由 router 层转 500
+#
+# 调用方（router）：
+#   try:
+#       await save_row(db, row)
+#   except Exception:
+#       raise HTTPException(500, "数据库保存失败") from None
+#
+# 收益：写库逻辑只在一处——以后加审计、加日志、换驱动只改这一个函数
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 S：service 层"查不到"自定义异常 —— 分层项目的通用模式
+# 适用：业务编排在 service（不 import FastAPI）时表达"资源不存在"
+# ═══════════════════════════════════════════════════════════
+#   class XxxNotFoundError(Exception):
+#       """业务目标不存在的信号。router 捕获后翻译成 HTTP 404。"""
+#
+#   # service 层（不 import FastAPI）：
+#   async def do_business(db, target_id):
+#       row = await db.get(Model, target_id)   # 主键查询：查不到返回 None
+#       if row is None:
+#           raise XxxNotFoundError(f"目标不存在: {target_id}")
+#       ...
+#
+#   # router 层（翻译成 HTTP）：
+#   try:
+#       result = await do_business(db, req.target_id)
+#   except XxxNotFoundError:
+#       raise HTTPException(404, "目标不存在") from None
+#
+# 为什么 service 不直接抛 HTTPException：
+#   分层铁律——service 不知道 HTTP 的存在（可被接口/脚本/测试调用）；
+#   "同一事实、两种信号"：router 用 HTTPException，service 用自定义异常
+# ═══════════════════════════════════════════════════════════

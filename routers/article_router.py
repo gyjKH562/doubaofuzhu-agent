@@ -22,6 +22,7 @@ from schemas.article_schemas import (
     ArticleResp,     # 单条响应体：返回字段的裁剪出口
     ArticleUpdate,   # 更新请求体：全部可选（部分更新用）
 )
+from services.db_helpers import save_row
 
 logger = logging.getLogger(__name__)  # 本模块日志器，格式沿用 main.py 的 basicConfig
 
@@ -57,15 +58,12 @@ async def create_article(req: ArticleCreate, db: AsyncSession = Depends(get_db))
     )
 
     # 第 2 步：写库三部曲——add 登记、commit 落库、refresh 同步
-    db.add(db_row)                # ① 登记进会话（未落库）
     try:
-        await db.commit()         # ② 真正执行 INSERT，id 在这里生成
-        await db.refresh(db_row)  # ③ 从数据库重读，确保返回权威值
+        await save_row(db, db_row)  # 三部曲收敛成一行（add/commit/refresh/rollback 都在里面）
     except Exception as e:
-        await db.rollback()       # 失败回滚，不留半截数据
         logger.error("创建失败: %s: %s", type(e).__name__, str(e))
-        raise HTTPException(status_code=500, detail="数据库保存失败，请稍后重试")
-    return db_row                 # response_model 自动转成 ArticleResp 的 JSON
+        raise HTTPException(status_code=500, detail="数据库保存失败，请稍后重试") from None
+    return db_row
 
 @router.get("/list", response_model=ArticleListResp, summary="文章列表")
 async def list_articles(
@@ -136,12 +134,10 @@ async def update_article(
 
     # ⑤ 写库三部曲（同创建接口；第 3 次出现时会抽成公共函数）
     try:
-        await db.commit()         # 落库：执行 UPDATE 语句
-        await db.refresh(row)     # 从库重读，拿到权威值（含 updated_at 变化）
+        await save_row(db, row)  # row 已持久化，save_row 里的 add 幂等
     except Exception as e:
-        await db.rollback()       # 失败回滚，对象保持原样
         logger.error("更新失败 id=%d: %s: %s", article_id, type(e).__name__, str(e))
-        raise HTTPException(status_code=500, detail="数据库更新失败，请稍后重试")
+        raise HTTPException(status_code=500, detail="数据库更新失败，请稍后重试") from None
     return row
 
 @router.delete("/{article_id}", status_code=204, summary="删除文章")

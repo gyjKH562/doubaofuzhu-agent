@@ -10,9 +10,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response  # Response：�
 from sqlalchemy.ext.asyncio import AsyncSession  # 异步会话类型
 
 from database import get_db                                # 会话依赖：每个请求一个 db
-from schemas.article_schemas import ArticleResp, GenerateRequest  # 响应/请求模型
+from schemas.article_schemas import ArticleResp, GenerateRequest,RefineRequest  # 响应/请求模型
 from services.generate_service import generate_article     # 业务编排入口
 from services.llm_service import LLMError                 # 大模型错误类型
+from services.refine_service import ArticleNotFoundError, refine_article
 
 logger = logging.getLogger(__name__)  # 本模块日志器
 
@@ -53,3 +54,31 @@ async def generate_api(
     response.status_code =  200 if is_cached else 201
 
     return row  # FastAPI 按 response_model=ArticleResp 序列化返回
+
+@router.post("/refine", response_model=ArticleResp, summary="改写文章")
+async def refine_api(
+    req: RefineRequest,               # 请求体：article_id 必填，instruction 可选
+    db: AsyncSession = Depends(get_db),  # 会话依赖
+):
+    """按指令改写指定文章的公众号内容 + 小红书笔记。
+
+    - 成功：200（改写是更新已有资源，不是新建）
+    - 文章不存在：404；大模型失败：502；格式异常：502；写库失败：500
+    """
+    try:
+        # 调业务编排：查记录 / 拼 prompt / 调模型 / 解析 / 更新 都在 service
+        row = await refine_article(db, req.article_id, req.instruction)
+    except ArticleNotFoundError:              # service 层"查不到"信号 → 404
+        logger.warning("改写失败：文章不存在 id=%d", req.article_id)
+        raise HTTPException(status_code=404, detail="文章不存在") from None
+    except LLMError as e:                     # 上游（大模型）失败 → 502
+        logger.error("改写失败（大模型）：%s", e)
+        raise HTTPException(status_code=502, detail=str(e)) from None
+    except ValueError as e:                   # 模型输出格式不对 → 502
+        logger.error("改写失败（输出解析）：%s", e)
+        raise HTTPException(status_code=502, detail="模型输出格式异常") from None
+    except Exception as e:                    # 其他（写库失败）→ 500
+        logger.error("改写失败（写库）：%s: %s", type(e).__name__, str(e))
+        raise HTTPException(status_code=500, detail="数据库保存失败") from None
+
+    return row  # 默认 200：更新已有资源

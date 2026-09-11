@@ -58,3 +58,16 @@ class GenerateRequest(BaseModel):
     自己传文章内容，生成接口的内容必须来自模型，收了反而危险。
     """
     topic: str = Field(..., min_length=1, max_length=120, description="文章选题")
+
+class RefineRequest(BaseModel):
+    """改写接口的请求体：指定改哪篇 + 怎么改。
+
+    article_id 必填；instruction 可选（不传用默认"优化表达"指令）。
+    """
+    article_id: int = Field(..., gt=0, description="要改写的文章 id")
+    instruction: str | None = Field(  # 改写要求：可选
+        None,
+        min_length=1,   # 传了就不能是空串
+        max_length=200, # 超长 422
+        description="改写指令，如'写得更口语化'；不传则默认优化表达",
+    )
