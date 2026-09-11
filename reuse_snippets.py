@@ -436,3 +436,78 @@ async def list_items(
 #   - 提高启动速度（用到了才创建）
 #   - 测试友好（可随时重置 _client = None 重新创建）
 # ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 O：业务编排 service 骨架（缓存优先）—— 所有"先查再干"业务通用
+# 适用：AI 生成 / 外部服务调用 / 任何"重复请求不应重复花钱/重复劳动"的业务
+# 分层铁律：service 不 import FastAPI（不出现 HTTPException/Response）
+#           ——业务异常向上抛，由 router 翻译成 HTTP 状态码
+# ═══════════════════════════════════════════════════════════
+#   async def find_cached(db, key) -> Model | None:
+#       """查缓存：命中条件自己定义（本项目的口径：同 topic 且内容非空）。"""
+#       stmt = (select(Model).where(Model.key == key, ...)
+#               .order_by(Model.id.desc()).limit(1))
+#       return (await db.execute(stmt)).scalar_one_or_none()
+#
+#   async def do_business(db, key) -> tuple[Model, bool]:
+#       """主流程：缓存优先。返回 (结果, 是否命中缓存)。"""
+#       cached = await find_cached(db, key)     # ① 查缓存
+#       if cached is not None:                  # 命中：直接返回，零成本
+#           return cached, True
+#       result = await expensive_call(key)      # ② 未命中：做真正的工作
+#       db.add(result)                          # ③ 写库（下次就是缓存）
+#       await db.commit()
+#       return result, False
+#
+# 缓存哲学：能用查询解决的，先不引组件（Redis 是数据量大之后的选项）
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 P：函数返回值携带"标志位"（元组模式）
+# 适用：调用方需要区分"新建 vs 命中 / 成功 vs 降级"等二元结果时
+# 对比：改全局变量/再查一次 → 有状态/多一次 IO；返回元组 → 无副作用
+# ═══════════════════════════════════════════════════════════
+#   async def get_or_create(db, key) -> tuple[Model, bool]:
+#       """返回 (记录, 是否已存在)。"""
+#       existing = await find(db, key)
+#       if existing:
+#           return existing, True        # 已存在
+#       new = Model(...)
+#       db.add(new)
+#       await db.commit()
+#       return new, False                # 本次新建
+#
+#   # 调用方解包 + 按标志决定行为：
+#   row, is_existing = await get_or_create(db, key)
+#   response.status_code = 200 if is_existing else 201
+#
+# 要点：
+#   - 改函数签名后要全局搜调用点（本项目 generate_article 只有一处调用，
+#     但项目大了这是必踩的坑）
+#   - 元组元素顺序固定，解包时按位置对齐，别把 True/False 搞反
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 Q：router 异常翻译表 —— 所有调外部服务的接口通用
+# 适用：AI 接口 / 第三方 API 代理 / 任何"上游可能挂"的接口
+# 口诀：上游错 → 502；格式错 → 502；自己错 → 500
+# ═══════════════════════════════════════════════════════════
+#   try:
+#       result = await do_business(db, req.key)
+#   except UpstreamError as e:                 # 上游服务（大模型/第三方）挂了
+#       logger.error("失败（上游）：%s", e)
+#       raise HTTPException(502, detail="上游服务不可用") from None
+#   except ValueError as e:                    # 上游返回的数据格式不对
+#       logger.error("失败（解析）：%s", e)
+#       raise HTTPException(502, detail="上游返回格式异常") from None
+#   except Exception as e:                     # 我们自己的问题（写库失败等）
+#       logger.error("失败（内部）：%s: %s", type(e).__name__, str(e))
+#       raise HTTPException(500, detail="内部错误") from None
+#   return result
+#
+# 为什么 502 vs 500 要分清：
+#   运维看到 502 会查上游服务，看到 500 会查你的代码——错误归属影响排障方向
+# ═══════════════════════════════════════════════════════════

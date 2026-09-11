@@ -50,3 +50,11 @@ class ArticleUpdate(BaseModel):
     topic: str | None = Field(None, min_length=1, max_length=120, description="文章选题")
     gzh_article: str | None = Field(None, description="公众号文章(Markdown 格式)")
     xhs_note: str | None = Field(None, description="小红书笔记")
+
+class GenerateRequest(BaseModel):
+    """生成接口的请求体：只需要选题，两篇文章由模型产出。
+
+    为什么不复用 ArticleCreate：接口契约不同——创建接口允许客户端
+    自己传文章内容，生成接口的内容必须来自模型，收了反而危险。
+    """
+    topic: str = Field(..., min_length=1, max_length=120, description="文章选题")

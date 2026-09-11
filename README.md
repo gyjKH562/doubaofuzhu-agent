@@ -1,12 +1,12 @@
 # 自媒体文案生成工具（后端）
 
-> 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 6 步）
+> 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 7 步）
 
 基于 FastAPI 的文案生成工具后端：输入选题，生成公众号文章和小红书笔记。
 按"增量迭代"方式从零构建：每步只实现最小可用功能，先跑通原型再逐步加固。
 
-**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构 + 大模型调用能力（OpenAI SDK 异步封装：超时 / 重试 / 五级错误分类）。
-**规划中**：生成接口串联（缓存命中 + 调模型 + 写库）→ 改写接口 → 异常处理 → 限流加固 → 自动化测试。
+**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构 + 大模型调用能力（OpenAI SDK 异步封装：超时 / 重试 / 五级错误分类）+ **生成接口串联**（缓存优先：命中直接返回、未命中调模型写库）。
+**规划中**：改写接口 → 异常处理 → 限流加固 → 自动化测试。
 
 ## 技术栈
 
@@ -29,7 +29,8 @@
 - [x] 第 4 步：读接口（单条查询 404 / 分页 count+offset+limit / 关键词参数化搜索）
 - [x] 第 5 步：更新 + 删除接口（CRUD 闭环）+ 第一次重构（抽 routers/article_router.py）
 - [x] 第 6 步：集成大模型（AsyncOpenAI 调用 DeepSeek：超时 / 重试 / 五级错误分类 / 懒加载单例）
-- [ ] 后续：生成接口串联 → 改写接口 → 异常处理 → 限流加固 → 自动化测试
+- [x] 第 7 步：生成接口串联（缓存命中 + 调模型 + 写库 + 动态状态码）
+- [ ] 后续：改写接口 → 异常处理 → 限流加固 → 自动化测试
 
 ## 快速开始
 
@@ -76,6 +77,7 @@ python main.py
 - 健康检查：浏览器打开 `http://127.0.0.1:8000/health` → 返回 `{"status":"ok"}`
 - 接口文档：浏览器打开 `http://127.0.0.1:8000/docs` → 看到 Swagger 页面，可直接点 "Try it out" 调接口
 - 大模型链路：`python scripts/test_llm.py` → 打印"模型回复：..."（需已配置 key）
+- 生成链路：`POST /api/generate` body `{"topic": "你的选题"}` → 第一次 201、同 topic 第二次 200（缓存命中）
 
 > 端口提示：本项目用 8000（`.env` 的 APP_PORT 控制）。曾实战遇到 8000 被本机其他程序占用，
 > 改 `.env` 的 APP_PORT 即可、无需改代码——这就是配置分离的意义；后续已改回 8000。
@@ -92,8 +94,7 @@ python main.py
 | GET | /api/article/{article_id} | 按 id 查询单条（不存在返回 404） |
 | PUT | /api/article/{article_id} | 部分更新（只改传入字段，不传的保持不变） |
 | DELETE | /api/article/{article_id} | 按 id 删除（成功返回 204 无内容） |
-
-> 大模型能力已封装为 `services/llm_service.call_llm()`，第 7 步接入生成接口。
+| POST | /api/generate | 按选题生成公众号文章 + 小红书笔记：缓存命中 200 / 新生成 201 / 大模型失败 502 |
 
 ## 工程故事点（面试 / 作品集展示用）
 
@@ -119,6 +120,12 @@ python main.py
    认证 401 / 超时 / 网络 / 状态码（429、500）/ 兜底——调用方看到错误类别就知道下一步动作（换 key / 重试 / 查网络）。其中 `APITimeoutError` 必须先于 `APIConnectionError` 捕获（子类关系）。
 10. **懒加载单例是什么？**
     重对象（连接池客户端）只创建一次、反复复用；懒加载（用到才建）避免 import 副作用（key 未配时不崩）。
+11. **生成接口的缓存为什么先查数据库而不是引 Redis？——YAGNI**
+    缓存 = article_record 表本身：同选题已生成过就直接返回，零新组件、持久共享、重启不丢。能用查询解决的先不引组件，数据量大了再考虑 Redis。
+12. **502 和 500 怎么区分？**
+    502 = 上游（大模型）挂了，运维去查大模型服务；500 = 我们自己的代码/数据库出问题，运维来查你。错误归属决定排障方向——所以 service 抛业务异常，router 翻译成准确的状态码。
+13. **薄 router、厚 service 的分层原则**
+    router 只做"收参 + 翻译异常"，业务编排（缓存/调模型/写库）在 service；service 不 import FastAPI，可被接口、脚本、测试任意调用——依赖方向只能从上往下，不能反过来。
 
 ## 配置项
 
@@ -139,13 +146,15 @@ doubaofuzhuAgent-tutorial/
 ├── database.py            # 数据库层：异步引擎 / 会话依赖 / ORM 模型 / 建表函数
 ├── routers/
 │   ├── __init__.py        # 包标记
-│   └── article_router.py  # 文章域全部接口（CRUD，APIRouter 组织）
+│   ├── article_router.py  # 文章域 CRUD 接口（APIRouter 组织）
+│   └── generate_router.py # AI 生成域接口（POST /api/generate，薄 router）
 ├── services/
 │   ├── __init__.py        # 包标记
-│   └── llm_service.py     # 大模型调用服务（AsyncOpenAI 单例 + call_llm + 错误分类）
+│   ├── llm_service.py     # 大模型调用服务（AsyncOpenAI 单例 + call_llm + 错误分类）
+│   └── generate_service.py # 生成业务编排（缓存优先 + 解析 + 写库，不依赖 web 框架）
 ├── schemas/
 │   ├── __init__.py        # 包标记
-│   └── article_schemas.py # 请求/响应模型（Create/Resp/ListResp/Update）
+│   └── article_schemas.py # 请求/响应模型（Create/Resp/ListResp/Update/GenerateRequest）
 ├── scripts/
 │   └── test_llm.py        # 手动验证脚本：大模型调用链路（非 pytest）
 ├── requirements.txt       # 运行依赖（版本锁定）
@@ -164,7 +173,7 @@ doubaofuzhuAgent-tutorial/
 4. ✅ 读接口：单条查询 + 列表分页 + 关键词搜索
 5. ✅ 更新 + 删除接口（CRUD 闭环）+ 抽路由重构
 6. ✅ 集成大模型：AsyncOpenAI 调用 DeepSeek（超时 / 重试 / 错误分类）
-7. ⬜ 生成接口串联：缓存命中 + 调模型 + 写库
+7. ✅ 生成接口串联：缓存命中 + 调模型 + 写库 + 动态状态码
 8. ⬜ 文章改写接口（复用之道的实践）
 9. ⬜ 统一异常处理 + 参数校验强化
 10. ⬜ 限流 + CORS（部署前加固）
@@ -182,3 +191,4 @@ doubaofuzhuAgent-tutorial/
 - 2026-09-09：第 4 步完成——读接口三件套：单条查询（scalar_one_or_none + 404）、分页（count + offset/limit，offset=(page-1)×page_size）、关键词搜索（contains 参数化防注入）；掌握路由声明顺序坑（静态路径必须声明在动态路径之前）与 Query 参数校验（ge/le/max_length）。
 - 2026-09-09：第 5 步完成——PUT 部分更新（exclude_unset 区分"没传"和"传了 null"，422 拦截置空）、DELETE 204 语义；第一次重构：抽 routers/article_router.py（Rule of Three）+ _get_article_or_404 复用函数；配齐 git 版本管理（init/add/commit/log，第一次提交 acddee）；安全习惯：.env.example 密码改占位符，真实密码只留在 .env 且不进 git。
 - 2026-09-10：第 6 步完成——集成大模型：对比手写 aiohttp 后选用 OpenAI 官方 SDK（AsyncOpenAI）；懒加载单例客户端（连接池复用）、max_retries 内置重试、Timeout 配置、五级异常分类（认证/超时/网络/状态码/兜底）与空内容检查（思考模型边界）；配置分离（API key 仅存 .env）；手动验证脚本 scripts/test_llm.py（无 key / 假 key / 真 key 三态验证）。
+- 2026-09-11：第 7 步完成——生成接口串联：业务编排收进 services/generate_service.py（薄 router 厚 service，service 不依赖 web 框架）；缓存优先（同选题已生成直接返回，数据库即缓存）；分隔符解析模型输出；动态状态码（缓存命中 200 / 新生成 201，函数返回 (record, is_cached) 元组）；502 vs 500 错误归属。实战踩坑两次：① Swagger 示例值 'string' 污染缓存（第 3 步的坑第三次踩），脏数据导致生成接口命中假缓存返回假内容——教训："接口有响应 ≠ 功能正确"，判断标准看数据库和日志；② 项目从 E 盘整体迁到 D 盘 + PyCharm 重装，验证 venv/git/.env/数据库四件套迁移无损。

@@ -15,6 +15,8 @@ from fastapi import FastAPI
 
 from database import create_tables
 from routers.article_router import router as article_router
+from routers.generate_router import router as generate_router
+
 
 # 先加载 .env，再读环境变量（顺序不能反）
 load_dotenv()
@@ -42,6 +44,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="自媒体文案生成工具", version="0.1.0", lifespan=lifespan)
 
 app.include_router(article_router)
+app.include_router(generate_router)
 
 @app.get("/health", summary="健康检查")
 async def health_check() -> dict:
