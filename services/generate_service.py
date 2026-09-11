@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # 异步会话类型（类型�
 from database import ArticleRecord                 # ORM 模型：对应 article_record 表
 from services.llm_service import LLMError, call_llm  # 第 6 步的封装：调模型 + 错误分类
 from services.db_helpers import save_row
+from services.exceptions import ModelOutputError
 
 logger = logging.getLogger(__name__)  # 本模块的日志器，__name__ = "services.generate_service"
 
@@ -62,7 +63,7 @@ def parse_generated(text: str) -> tuple[str, str]:
     parts = text.split(SEP_GZH, 1)
     # ② 如果切不出第二段，说明模型根本没按格式输出——直接判失败
     if len(parts) < 2:
-        raise ValueError("模型输出缺少公众号分隔符")
+        raise ModelOutputError("模型输出缺少公众号分隔符")  # 原来是 ValueError
     # ③ 取分隔符之后的部分（里面装着公众号 + 小红书两段）
     rest = parts[1]
     # ④ 再按小红书分隔符切一次，把公众号和小红书分开
@@ -73,7 +74,7 @@ def parse_generated(text: str) -> tuple[str, str]:
     xhs = xhs_parts[1].strip() if len(xhs_parts) > 1 else ""
     # ⑦ 公众号为空 = 解析结果不可用，宁可报错也不写残缺数据
     if not gzh:
-        raise ValueError("公众号内容为空")
+        raise ModelOutputError("公众号内容为空")              # 原来是 ValueError
     logger.info("解析成功：公众号 %d 字，小红书 %d 字", len(gzh), len(xhs))
     return gzh, xhs   # 返回解包后的两段内容
 

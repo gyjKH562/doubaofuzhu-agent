@@ -8,6 +8,7 @@ db_helpers.py —— 数据库操作公共函数
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession  # 会话类型注解
+from services.exceptions import DBError
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ async def save_row(db: AsyncSession, row) -> None:
         await db.commit()         # ② 落库：真正执行 SQL
         await db.refresh(row)     # ③ 从库重读，拿到 id/时间戳等权威值
     except Exception as e:
-        await db.rollback()       # 失败回滚：不留半截数据
+        await db.rollback()  # 失败回滚：不留半截数据
         logger.error("写库失败: %s: %s", type(e).__name__, str(e))
-        raise                     # 原样抛出，由调用方决定如何转 HTTP
+        # 包装成 DBError 上抛（from e 保留根因链，全局处理器转 500）
+        raise DBError("数据库保存失败") from e

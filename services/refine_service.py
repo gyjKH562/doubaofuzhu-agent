@@ -21,6 +21,7 @@ from database import ArticleRecord
 from services.db_helpers import save_row
 from services.generate_service import SEP_GZH, SEP_XHS, parse_generated
 from services.llm_service import LLMError, call_llm
+from services.exceptions import ArticleNotFoundError, ModelOutputError
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +36,7 @@ REFINE_PROMPT = (
 # 默认改写指令：用户不传 instruction 时用（模板里写清默认行为）
 DEFAULT_INSTRUCTION = "在保持原意的前提下优化表达，让内容更吸引读者"
 
-class ArticleNotFoundError(Exception):
-    """改写目标文章不存在的信号。
 
-    为什么自定义异常：service 层不能 import FastAPI（分层铁律），
-    "查不到"用异常表达，router 捕获后翻译成 HTTP 404。
-    """
 
 async def refine_article(
     db: AsyncSession,

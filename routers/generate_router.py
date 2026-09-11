@@ -12,8 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # 异步会话类型
 from database import get_db                                # 会话依赖：每个请求一个 db
 from schemas.article_schemas import ArticleResp, GenerateRequest,RefineRequest  # 响应/请求模型
 from services.generate_service import generate_article     # 业务编排入口
-from services.llm_service import LLMError                 # 大模型错误类型
-from services.refine_service import ArticleNotFoundError, refine_article
+from services.refine_service import  refine_article
 
 logger = logging.getLogger(__name__)  # 本模块日志器
 
@@ -31,21 +30,7 @@ async def generate_api(
     - 缓存命中：改成 200（返回已有资源）——调用方靠状态码区分
     - 大模型失败：502（上游服务不可用）；格式异常：502；写库失败：500
     """
-    try:
-        # 调业务编排：查缓存 / 调模型 / 写库都在 service 里
-        row, is_cached = await generate_article(db, req.topic)
-    except LLMError as e:
-        # 上游（大模型）失败：502 Bad Gateway——"网关后面的服务挂了"
-        logger.error("生成失败（大模型）：%s", e)
-        raise HTTPException(status_code=502, detail=str(e)) from None
-    except ValueError as e:
-        # 模型输出格式不对（解析失败）——同样算上游问题，502
-        logger.error("生成失败（输出解析）：%s", e)
-        raise HTTPException(status_code=502, detail="模型输出格式异常") from None
-    except Exception as e:
-        # 其他（写库失败等）——这是"我们自己的问题"，500
-        logger.error("生成失败（写库）：%s: %s", type(e).__name__, str(e))
-        raise HTTPException(status_code=500, detail="数据库保存失败") from None
+    row, is_cached = await generate_article(db, req.topic)   # 异常全部交给全局处理器
 
     # 【小挑战·留给你】动态状态码：
     #   目标：缓存命中时 response.status_code = 200，新生成保持 201
@@ -65,20 +50,6 @@ async def refine_api(
     - 成功：200（改写是更新已有资源，不是新建）
     - 文章不存在：404；大模型失败：502；格式异常：502；写库失败：500
     """
-    try:
-        # 调业务编排：查记录 / 拼 prompt / 调模型 / 解析 / 更新 都在 service
-        row = await refine_article(db, req.article_id, req.instruction)
-    except ArticleNotFoundError:              # service 层"查不到"信号 → 404
-        logger.warning("改写失败：文章不存在 id=%d", req.article_id)
-        raise HTTPException(status_code=404, detail="文章不存在") from None
-    except LLMError as e:                     # 上游（大模型）失败 → 502
-        logger.error("改写失败（大模型）：%s", e)
-        raise HTTPException(status_code=502, detail=str(e)) from None
-    except ValueError as e:                   # 模型输出格式不对 → 502
-        logger.error("改写失败（输出解析）：%s", e)
-        raise HTTPException(status_code=502, detail="模型输出格式异常") from None
-    except Exception as e:                    # 其他（写库失败）→ 500
-        logger.error("改写失败（写库）：%s: %s", type(e).__name__, str(e))
-        raise HTTPException(status_code=500, detail="数据库保存失败") from None
+    row = await refine_article(db, req.article_id, req.instruction)   # 就这一行
 
     return row  # 默认 200：更新已有资源

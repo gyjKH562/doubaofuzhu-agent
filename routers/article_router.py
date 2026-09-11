@@ -6,7 +6,7 @@ APIRouter 是 FastAPI 的组织单元：prefix 统一路径前缀，tags 决定 
 """
 import logging  # 日志：记录接口调用与错误，替代 print（生产可分级过滤）
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response,Path
 #   - APIRouter：组织一组接口的路由对象
 #   - Depends：依赖注入，框架自动提供 db 会话
 #   - HTTPException：抛 HTTP 错误（404/422/500）
@@ -23,6 +23,7 @@ from schemas.article_schemas import (
     ArticleUpdate,   # 更新请求体：全部可选（部分更新用）
 )
 from services.db_helpers import save_row
+from services.exceptions import ArticleNotFoundError
 
 logger = logging.getLogger(__name__)  # 本模块日志器，格式沿用 main.py 的 basicConfig
 
@@ -40,7 +41,7 @@ async def _get_article_or_404(db: AsyncSession, article_id: int) -> ArticleRecor
     result = await db.execute(stmt)      # 执行查询（异步必须 await）
     row = result.scalar_one_or_none()    # 0 条→None；1 条→对象；多条→报错
     if row is None:                      # 查不到：抛 404，由 FastAPI 转成 HTTP 响应
-        raise HTTPException(status_code=404, detail="记录不存在")
+        raise ArticleNotFoundError(f"文章不存在: {article_id}")
     return row
 
 @router.post("", response_model=ArticleResp, status_code=201, summary="创建文章")
@@ -58,11 +59,7 @@ async def create_article(req: ArticleCreate, db: AsyncSession = Depends(get_db))
     )
 
     # 第 2 步：写库三部曲——add 登记、commit 落库、refresh 同步
-    try:
-        await save_row(db, db_row)  # 三部曲收敛成一行（add/commit/refresh/rollback 都在里面）
-    except Exception as e:
-        logger.error("创建失败: %s: %s", type(e).__name__, str(e))
-        raise HTTPException(status_code=500, detail="数据库保存失败，请稍后重试") from None
+    await save_row(db, db_row)  # 三部曲收敛成一行（add/commit/refresh/rollback 都在里面）
     return db_row
 
 @router.get("/list", response_model=ArticleListResp, summary="文章列表")
@@ -98,19 +95,24 @@ async def list_articles(
         .offset(offset)                     # 跳过前 offset 条
         .limit(page_size)                   # 只取 page_size 条
     )
-    rows = (await db.execute(list_stmt)).scalars().all()  # 取全部结果成列表
+    rows = list((await db.execute(list_stmt)).scalars().all())  # 取全部结果，list() 转成 list 类型
 
     logger.info("查询完成：total=%d 返回 %d 条", total, len(rows))
-    return ArticleListResp(total=total, items=rows)  # items 是 ORM 列表，自动转 JSON
+    return ArticleListResp(total=total, items=rows)  # ← 补上这行！response_model 的出口
 
 @router.get("/{article_id}", response_model=ArticleResp, summary="查询单条")
-async def get_article(article_id: int, db: AsyncSession = Depends(get_db)):
+async def get_article(
+        *,
+        article_id: int = Path(..., gt=0, description="文章 id（必须 >0）"),
+        db: AsyncSession = Depends(get_db),
+):
     """按 id 查询单条文章记录；查不到由 _get_article_or_404 抛 404。"""
     return await _get_article_or_404(db, article_id)  # 复用：存在性检查 + 404
 
 @router.put("/{article_id}", response_model=ArticleResp, summary="更新文章")
 async def update_article(
-    article_id: int,
+    *,
+    article_id: int = Path(..., gt=0, description="文章 id（必须 >0）"),
     req: ArticleUpdate,
     db: AsyncSession = Depends(get_db),
 ):
@@ -133,25 +135,22 @@ async def update_article(
         setattr(row, field, value)
 
     # ⑤ 写库三部曲（同创建接口；第 3 次出现时会抽成公共函数）
-    try:
-        await save_row(db, row)  # row 已持久化，save_row 里的 add 幂等
-    except Exception as e:
-        logger.error("更新失败 id=%d: %s: %s", article_id, type(e).__name__, str(e))
-        raise HTTPException(status_code=500, detail="数据库更新失败，请稍后重试") from None
+    await save_row(db, row)  # row 已持久化，save_row 里的 add 幂等
     return row
 
 @router.delete("/{article_id}", status_code=204, summary="删除文章")
-async def delete_article(article_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_article(
+        *,
+        article_id: int = Path(..., gt=0, description="文章 id（必须 >0）"),
+        db: AsyncSession = Depends(get_db)
+):
     """按 id 删除；成功返回 204（无响应体），查不到返回 404。
 
     ⚠ 注意：删除后不要 refresh——行已从库中删除，刷新会报错。
     """
     row = await _get_article_or_404(db, article_id)  # 不存在先 404
     await db.delete(row)          # 标记删除（此时还没落库）
-    try:
-        await db.commit()         # 提交：真正执行 DELETE FROM ... WHERE id=?
-    except Exception as e:
-        await db.rollback()       # 失败回滚
-        logger.error("删除失败 id=%d: %s: %s", article_id, type(e).__name__, str(e))
-        raise HTTPException(status_code=500, detail="数据库删除失败，请稍后重试")
+
+    await db.commit()         # 提交：真正执行 DELETE FROM ... WHERE id=?
+
     return Response(status_code=204)  # 204 显式返回空响应，不带 body

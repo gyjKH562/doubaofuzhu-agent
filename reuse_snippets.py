@@ -567,3 +567,54 @@ async def list_items(
 #   分层铁律——service 不知道 HTTP 的存在（可被接口/脚本/测试调用）；
 #   "同一事实、两种信号"：router 用 HTTPException，service 用自定义异常
 # ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 T：全局异常处理器配置 —— FastAPI 项目的标准错误处理骨架
+# 适用：所有 FastAPI 项目（三件套：异常集中定义 + 全局注册 + router 放手）
+# ═══════════════════════════════════════════════════════════
+#   # ① 集中定义业务异常（services/exceptions.py）
+#   class ArticleNotFoundError(Exception):   # → 404
+#       """资源不存在的信号。"""
+#   class ModelOutputError(Exception):        # → 502
+#       """上游输出格式异常的信号。"""
+#   class DBError(Exception):                 # → 500
+#       """数据库写操作失败的信号。"""
+#
+#   # ② 全局注册（main.py，app 实例上）
+#   from fastapi.responses import JSONResponse
+#   @app.exception_handler(ArticleNotFoundError)
+#   async def _not_found(request, exc):
+#       logger.warning("资源不存在: %s", exc)
+#       return JSONResponse(status_code=404, content={"detail": str(exc)})
+#   # ModelOutputError → 502 / DBError → 500 同理
+#
+#   # ③ router 彻底放手（没有 try/except）
+#   @router.post("/xxx")
+#   async def xxx(req: Req, db=Depends(get_db)):
+#       row = await service_do(db, req.id)   # 异常全交给全局处理器
+#       return row
+#
+# 铁律：router 里不能再留 except Exception——它会先接住领域异常，
+# 全局处理器永远收不到（这是最常见的"502 变 500"原因）
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 U：专用业务异常 vs 裸内建异常 —— 精确错误信号
+# 适用：任何"解析/处理失败需要精确归因"的代码
+# ═══════════════════════════════════════════════════════════
+#   # ❌ 裸内建异常的问题
+#   raise ValueError("模型输出缺少分隔符")
+#   # → 业务代码里任何地方都可能抛 ValueError（int() 转换、参数检查……），
+#   #   全局/上层接住它时无法区分"这是模型问题"还是"无关错误"
+#
+#   # ✅ 专用异常
+#   class ModelOutputError(Exception):
+#       """模型输出格式异常（语义 = 只有这一种情况才抛它）"""
+#   raise ModelOutputError("模型输出缺少分隔符")
+#   # → 上层 except ModelOutputError 时，命中即模型问题，100% 精确
+#
+# 原则：内建异常表达"语法/通用错误"；业务语义用自定义异常表达。
+# 收益：错误分类一处定（异常类）、翻译一处做（处理器），排障方向清晰。
+# ═══════════════════════════════════════════════════════════
