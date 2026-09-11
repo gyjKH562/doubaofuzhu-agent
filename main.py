@@ -13,6 +13,8 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse  # 构造 JSON 错误响应
+from fastapi.middleware.cors import CORSMiddleware        # CORS 中间件
+from services.rate_limiter import FixedWindowLimiter       # 限流器
 
 from database import create_tables
 from routers.article_router import router as article_router
@@ -69,6 +71,38 @@ async def db_error_handler(request, exc: DBError):
     """数据库写失败 → 500（我们自己的问题）。"""
     logger.error("数据库操作失败: %s", exc)
     return JSONResponse(status_code=500, content={"detail": "数据库保存失败"})
+
+# 浏览器同源策略：前端域名调本 API 会被浏览器拦截，除非服务器声明允许
+# 开发期用 "*"（允许所有来源）；生产必须收窄到真实前端域名（.env 配置）
+# ⚠ "*" 与 allow_credentials=True 冲突（浏览器规范禁止），FastAPI 启动即报错
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")  # 配置分离
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,  # 允许的来源列表（开发期 *）
+    allow_methods=["*"],            # 允许所有 HTTP 方法（GET/POST/PUT/DELETE/OPTIONS）
+    allow_headers=["*"],            # 允许所有请求头（含 Content-Type）
+    allow_credentials=False,        # 用 "*" 时必须 False（见上方 ⚠）
+)
+
+# ---- ② 限流：保护自己 + 保护钱包 ----
+# generate/refine 每次调用都烧大模型 token，被刷 = 烧钱
+rate_limiter = FixedWindowLimiter(max_requests=30, window_seconds=60)  # 每 IP 每分钟 30 次
+
+@app.middleware("http")
+async def rate_limit_middleware(request, call_next):
+    """简单 IP 限流：超限返回 429 Too Many Requests。"""
+    client_ip = request.client.host if request.client else "unknown"  # 取客户端 IP
+    if not rate_limiter.allow(client_ip):      # 超限了
+        logger.warning("限流触发：IP=%s 路径=%s", client_ip, request.url.path)  # 留痕
+        return JSONResponse(status_code=429, content={"detail": "请求过于频繁，请稍后再试"})
+    return await call_next(request)            # 未超限：放行给内层中间件/路由
+
+# ---- ③ 全局 500 兜底（兑现第 9 步债）----
+# 未注册的未知异常：统一 JSON + 日志完整留痕，不向客户端泄漏内部细节
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc: Exception):
+    logger.exception("未处理异常: %s: %s", type(exc).__name__, str(exc))  # traceback 进日志
+    return JSONResponse(status_code=500, content={"detail": "服务器内部错误"})
 
 app.include_router(article_router)
 app.include_router(generate_router)

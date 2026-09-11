@@ -618,3 +618,62 @@ async def list_items(
 # 原则：内建异常表达"语法/通用错误"；业务语义用自定义异常表达。
 # 收益：错误分类一处定（异常类）、翻译一处做（处理器），排障方向清晰。
 # ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 V：CORS 配置 —— 前后端分离项目必备
+# 适用：所有 FastAPI 项目（浏览器同源策略的官方解法）
+# ═══════════════════════════════════════════════════════════
+#   from fastapi.middleware.cors import CORSMiddleware
+#
+#   # 白名单从配置读（开发用 *，生产改真实前端域名，逗号分隔）
+#   ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+#   app.add_middleware(
+#       CORSMiddleware,
+#       allow_origins=ALLOWED_ORIGINS,   # 允许的来源
+#       allow_methods=["*"],             # 允许的 HTTP 方法
+#       allow_headers=["*"],             # 允许的请求头
+#       allow_credentials=False,         # ⚠ "*" 时必须 False（浏览器规范禁止两者共存）
+#   )
+#
+# 铁律1："*" 与 allow_credentials=True 冲突，FastAPI 启动即报错
+# 铁律2：CORS 必须在外层（先 add），否则预检请求 OPTIONS 会被内层中间件误处理
+# 铁律3：CORS 是浏览器安全机制，curl/脚本不受影响（所以测试脚本一直没踩到）
+# ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 W：固定窗口限流器 —— 零依赖防刷/成本控制
+# 适用：任何需要"单位时间限 N 次"的服务（AI 项目尤其重要：每次调用都烧钱）
+# ═══════════════════════════════════════════════════════════
+#   import time
+#   from collections import defaultdict
+#
+#   class FixedWindowLimiter:
+#       """固定窗口限流：key 在窗口内最多 N 次；超限拒绝。"""
+#       def __init__(self, max_requests: int, window_seconds: int) -> None:
+#           self.max_requests = max_requests
+#           self.window_seconds = window_seconds
+#           self._records: dict[str, list] = defaultdict(lambda: [0.0, 0])
+#
+#       def allow(self, key: str) -> bool:
+#           now = time.monotonic()                # 单调时钟：防改系统时间绕过
+#           record = self._records[key]
+#           if now - record[0] >= self.window_seconds:  # 超窗口 → 重置
+#               record[0] = now
+#               record[1] = 0
+#           record[1] += 1
+#           return record[1] <= self.max_requests
+#
+#   # 中间件用法（main.py）：
+#   limiter = FixedWindowLimiter(max_requests=30, window_seconds=60)
+#   @app.middleware("http")
+#   async def rate_limit(request, call_next):
+#       ip = request.client.host if request.client else "unknown"
+#       if not limiter.allow(ip):
+#           return JSONResponse(status_code=429, content={"detail": "请求过于频繁"})
+#       return await call_next(request)
+#
+# 局限（记技术债）：单机内存（多实例失效/重启丢失）、固定窗口边界突刺、
+# 代理后 request.client.host 失真（生产解析 X-Forwarded-For）→ 生产换 Redis/网关
+# ═══════════════════════════════════════════════════════════

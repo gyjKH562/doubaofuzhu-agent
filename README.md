@@ -1,17 +1,17 @@
 # 自媒体文案生成工具（后端）
 
-> 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 9 步）
+> 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 10 步）
 
 基于 FastAPI 的文案生成工具后端：输入选题，生成公众号文章和小红书笔记。
 按"增量迭代"方式从零构建：每步只实现最小可用功能，先跑通原型再逐步加固。
 
-**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构 + 大模型调用能力（OpenAI SDK 异步封装：超时 / 重试 / 五级错误分类）+ 生成/改写接口串联（缓存优先）+ 复用之道的实践（save_row）+ **统一异常处理**（业务异常集中定义 + 全局处理器 + 参数校验强化）。
-**规划中**：限流加固 → 自动化测试。
+**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构 + 大模型调用能力（OpenAI SDK 异步封装：超时 / 重试 / 五级错误分类）+ 生成/改写接口串联（缓存优先）+ 复用之道的实践（save_row）+ 统一异常处理（业务异常集中定义 + 全局处理器 + 参数校验强化）+ **部署前加固**（CORS / 限流 / 全局 500 兜底）。
+**规划中**：自动化测试。
 
 ## 技术栈
 
 - Python 3.13
-- FastAPI 0.141.1 —— 异步 Web 框架（自带 Pydantic 校验 / 自动文档）
+- FastAPI 0.141.1 —— 异步 Web 框架（自带 Pydantic 校验 / 自动文档 / 中间件体系）
 - uvicorn 0.52.4 —— ASGI Web 服务器
 - SQLAlchemy 2.0.52 —— ORM（异步引擎 + 现代 Mapped 写法 + select 查询）
 - aiomysql 0.3.2 —— 异步 MySQL 驱动
@@ -32,7 +32,8 @@
 - [x] 第 7 步：生成接口串联（缓存命中 + 调模型 + 写库 + 动态状态码）
 - [x] 第 8 步：改写接口 + 第二次重构（写库三部曲抽成 save_row，复用之道的实践）
 - [x] 第 9 步：统一异常处理 + 参数校验强化（业务异常集中定义 / 全局处理器 / router 瘦身 / Path 校验）
-- [ ] 后续：限流加固 → 自动化测试
+- [x] 第 10 步：部署前加固（CORS 跨域 / IP 限流 / 全局 500 兜底）
+- [ ] 后续：pytest 自动化测试
 
 ## 快速开始
 
@@ -61,9 +62,10 @@ pip install -r requirements.txt
 
 ```powershell
 Copy-Item .env.example .env
-# 打开 .env 修改两项：
+# 打开 .env 修改：
 #   DATABASE_URL 里的 <your_password> → 你的 MySQL root 密码
 #   DEEPSEEK_API_KEY 的 <your_api_key> → 你的 DeepSeek API key
+#   ALLOWED_ORIGINS（可选）→ 开发用 *；上线改为前端真实域名
 ```
 
 ### 4. 启动服务
@@ -86,6 +88,7 @@ python main.py
 > 端口提示：本项目用 8000（`.env` 的 APP_PORT 控制）。曾实战遇到 8000 被本机其他程序占用，
 > 改 `.env` 的 APP_PORT 即可、无需改代码——这就是配置分离的意义；后续已改回 8000。
 > 改代码后必须重启服务（uvicorn 默认无热重载）——"改完不生效"第一排查项是"重启了吗"。
+> 限流：每 IP 每分钟 30 次（全局限流）。连续测试超 30 次会遇 429，等窗口重置即可——这是限流在工作。
 
 ## API 概览（当前已实现）
 
@@ -103,6 +106,7 @@ python main.py
 | POST | /api/refine | 按指令改写指定文章：成功 200 / 文章不存在 404 / 大模型失败 502 |
 
 > 第 9 步起，404/422/502/500 的错误翻译统一由全局异常处理器负责（router 只抛异常、不翻译）。
+> 第 10 步起，任意接口超限流返回 429；未知异常统一 500 JSON（不泄漏内部细节）。
 
 ## 工程故事点（面试 / 作品集展示用）
 
@@ -144,6 +148,12 @@ python main.py
     模型输出解析失败为什么定义 `ModelOutputError` 而不是抛 `ValueError`？ValueError 太宽泛——业务代码里任何地方都可能抛它，全局处理它会把无关错误也误判成"模型问题"。**内建异常表达通用语法错误，业务语义用自定义异常**——精确的信号才能精确地归因。
 18. **参数校验前置（fail fast）**
     `Path(..., gt=0)` 让非法 id 在进业务层之前就被 422 拦下——非法输入不该消耗数据库查询。行为变化：以前 `GET /api/article/0` 查库返回 404，现在直接 422。校验越靠前，代码越不容易被脏输入打穿。
+19. **为什么大模型项目必须限流？——成本控制**
+    generate/refine 每次调用都烧 DeepSeek token，被脚本刷一晚上 = 真金白银。限流（每 IP 每分钟 30 次）是"保护钱包"的工程手段。手写固定窗口（零依赖） vs slowapi（功能全） vs 网关限流（生产首选）——原型阶段手写，够用即止（YAGNI）。限流计时用 `time.monotonic()`（单调时钟）——防用户改系统时间绕过。
+20. **CORS：开发期 `*`，生产必须收窄**
+    浏览器同源策略是"门卫查学生证"（浏览器拦截跨域响应），不是"查能力"（curl 不受影响）。`*` + `allow_credentials=True` 是浏览器规范禁止的组合，FastAPI 启动即报错。中间件洋葱模型：CORS 必须在外层（先 add），否则预检请求 OPTIONS 会被内层限流误计数。白名单走 `.env` 配置（配置分离第 3 次实践）。
+21. **全局 500 兜底：对外不说细节，对内不丢现场**
+    未注册异常原来返回 `Internal Server Error` 纯文本（没结构、泄漏信息、无日志）。兜底处理器：响应干净 JSON `{"detail": "服务器内部错误"}`，日志用 `logger.exception` 记录完整 traceback——客户端拿不到内部细节，运维能拿到完整现场。
 
 ## 配置项
 
@@ -155,12 +165,13 @@ python main.py
 | DEEPSEEK_API_KEY | （无） | DeepSeek API 密钥（敏感，仅存 .env） |
 | DEEPSEEK_BASE_URL | https://api.deepseek.com | DeepSeek 接口地址（/v1 仅为兼容 OpenAI 而设） |
 | DEEPSEEK_MODEL | deepseek-chat | 模型名（deepseek-chat / deepseek-reasoner） |
+| ALLOWED_ORIGINS | * | CORS 允许的来源，逗号分隔；开发 `*`，上线改前端真实域名 |
 
 ## 项目结构
 
 ```
 doubaofuzhuAgent-tutorial/
-├── main.py                # 应用入口（装配）：FastAPI 实例、lifespan 建表、挂载路由、全局异常处理器
+├── main.py                # 应用入口（装配）：FastAPI 实例、lifespan 建表、挂载路由、全局异常处理器、CORS/限流中间件
 ├── database.py            # 数据库层：异步引擎 / 会话依赖 / ORM 模型 / 建表函数
 ├── routers/
 │   ├── __init__.py        # 包标记
@@ -169,6 +180,7 @@ doubaofuzhuAgent-tutorial/
 ├── services/
 │   ├── __init__.py        # 包标记
 │   ├── exceptions.py      # 业务异常集中定义（ArticleNotFoundError / ModelOutputError / DBError）
+│   ├── rate_limiter.py    # 轻量限流器（固定窗口计数，monotonic 时钟）
 │   ├── db_helpers.py      # 数据库操作公共函数（save_row 写库统一入口，失败抛 DBError）
 │   ├── llm_service.py     # 大模型调用服务（AsyncOpenAI 单例 + call_llm + 错误分类）
 │   ├── generate_service.py # 生成业务编排（缓存优先 + 解析 + 写库）
@@ -198,7 +210,7 @@ doubaofuzhuAgent-tutorial/
 7. ✅ 生成接口串联：缓存命中 + 调模型 + 写库 + 动态状态码
 8. ✅ 改写接口：POST /api/refine + 抽 save_row（复用之道的实践）
 9. ✅ 统一异常处理：业务异常集中定义 + 全局处理器 + 参数校验强化（router 瘦身）
-10. ⬜ 限流 + CORS（部署前加固）
+10. ✅ 部署前加固：CORS 跨域 + IP 限流 + 全局 500 兜底
 11. ⬜ pytest 自动化测试
 12. ⬜ 可选：Markdown 排版模块（纯后端文本处理）
 13. ⬜ 可选：异步任务队列
@@ -216,3 +228,4 @@ doubaofuzhuAgent-tutorial/
 - 2026-09-11：第 7 步完成——生成接口串联：业务编排收进 services/generate_service.py（薄 router 厚 service，service 不依赖 web 框架）；缓存优先（同选题已生成直接返回，数据库即缓存）；分隔符解析模型输出；动态状态码（缓存命中 200 / 新生成 201，函数返回 (record, is_cached) 元组）；502 vs 500 错误归属。实战踩坑两次：① Swagger 示例值 'string' 污染缓存（第 3 步的坑第三次踩），脏数据导致生成接口命中假缓存返回假内容——教训："接口有响应 ≠ 功能正确"，判断标准看数据库和日志；② 项目从 E 盘整体迁到 D 盘 + PyCharm 重装，验证 venv/git/.env/数据库四件套迁移无损。
 - 2026-09-11：第 8 步完成——改写接口 POST /api/refine：业务编排收进 services/refine_service.py（复用 call_llm / parse_generated / 分隔符 / save_row，只新写"查记录 + 拼 prompt + 更新字段"三小段）；第二次重构：写库三部曲第 3 次出现 → 抽 services/db_helpers.py 的 save_row（create/update/generate/refine 四路写库收敛一处，delete 因不可 refresh 不纳入）；service 层用 ArticleNotFoundError 表达"查不到"，router 翻译 404；改写后缓存联动（同选题再 generate 返回改写后内容）。实战踩坑：Swagger body 编辑器的尾逗号（{"article_id": 10,}）与"删了值没删键"（instruction: ""）都算请求体问题不是代码问题——422 的 detail 是定位第一现场（看 type 区分 json_invalid 语法层 / 字段校验层）；自制 scripts/test_api.py 通用测试脚本（交互式输入 JSON，绕开 PowerShell 引号转义与 Swagger 预填坑，GET/POST/PUT/DELETE 通用）。
 - 2026-09-11：第 9 步完成——统一异常处理：新建 services/exceptions.py 集中定义业务异常（ArticleNotFoundError / ModelOutputError / DBError）；main.py 注册全局异常处理器（404/502/502/500 翻译收编一处）；db_helpers.save_row 失败改抛 DBError；generate_service/refine_service 解析失败改抛 ModelOutputError（专用异常替代裸 ValueError）；generate_router 删光全部 try/except（router 只剩业务调用）；article_router 的 _get_article_or_404 改抛领域异常（与 refine 域统一信号）+ 路径参数 Path(gt=0) 校验前置。实战踩坑两次：① 改代码不生效——服务没重启（uvicorn 默认无热重载，运行中的进程还是旧代码；铁证：响应文案还是第 8 步的"记录不存在"）；② list 接口 500 ResponseValidationError（input: None）——加 list() 包装时误删了 return 语句，函数返回 None 无法序列化；排障流程复盘：先看 traceback 最底部（异常类型 + 出错行），再复现代码逻辑，别凭感觉改；教训：复现要覆盖函数整体（签名到 return），不能只测片段。另掌握：假 key 测试验证 LLMError 全局转 502 未被吞成 500（router 删干净的运行证据）。
+- 2026-09-11：第 10 步完成——部署前加固三件套：① CORS（CORSMiddleware，白名单走 ALLOWED_ORIGINS 配置，开发 `*`，`allow_credentials=False` 避冲突，必须外层先 add）；② 限流（手写 FixedWindowLimiter 固定窗口：monotonic 时钟 + defaultdict 计数，每 IP 每分钟 30 次，超限 429；为什么必须限流——generate/refine 每次调用烧 token，被刷 = 烧钱）；③ 全局 500 兜底（exception_handler(Exception)：干净 JSON + logger.exception 完整留痕，"对外不说细节、对内不丢现场"）。实战验证：31 次连续请求，第 26 次就 429（因为之前测试已消耗额度）——证明限流是"窗口内累计计数"，不因换脚本重置；CORS 头实测 access-control-allow-origin: *。技术债记录：固定窗口边界突刺 / 单机内存限流多实例失效 / 代理后 client.host 失真（生产解析 X-Forwarded-For）→ 生产换 Redis/网关。
