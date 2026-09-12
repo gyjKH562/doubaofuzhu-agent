@@ -677,3 +677,42 @@ async def list_items(
 # 局限（记技术债）：单机内存（多实例失效/重启丢失）、固定窗口边界突刺、
 # 代理后 request.client.host 失真（生产解析 X-Forwarded-For）→ 生产换 Redis/网关
 # ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 X：pytest 自动化测试骨架 —— 从"手工点接口"升级为"一条命令回归"
+# 适用：任何 FastAPI 项目（可重复验证 + 改代码不怕改坏）
+# ═══════════════════════════════════════════════════════════
+#   # 目录结构：
+#   #   pytest.ini            # testpaths + pythonpath = .
+#   #   requirements-dev.txt  # -r requirements.txt + pytest + httpx
+#   #   tests/
+#   #     conftest.py         # 全局夹具（关键三件事，见下）
+#   #     test_xxx.py         # 测试文件（test_ 前缀才被识别）
+#
+#   # conftest.py 关键三件事（顺序是命门）：
+#   # ① 环境变量隔离——必须在 import 业务代码【之前】设置：
+#   #    os.environ["DATABASE_URL"] = "mysql+.../test_db?charset=utf8mb4"
+#   #    from main import app          # ← 此时 database.py 读到测试库
+#   # ② 独立测试库：create_all 只建表不建库，先连"无库名"地址建库：
+#   #    CREATE DATABASE IF NOT EXISTS test_db CHARACTER SET utf8mb4
+#   # ③ client 夹具必须 scope="session"（踩坑教训）：
+#   #    aiomysql 连接绑定创建它的事件循环；TestClient 每次实例化
+#   #    会新建循环 → function 级夹具导致跨循环复用连接，崩
+#   #    "'NoneType' object has no attribute 'send'"
+#   #    @pytest.fixture(scope="session")
+#   #    def client(ensure_test_db):
+#   #        with TestClient(app) as c:   # with = 触发 lifespan（建表）
+#   #            yield c
+#
+#   # ④ 外部依赖必须 mock（花钱/慢/不可预测的统统替换）：
+#   #    @pytest.fixture
+#   #    def mock_llm(monkeypatch):
+#   #        async def fake(messages, max_tokens=2000): return "固定内容"
+#   #        # ⚠ patch 到"使用方模块"而非源模块（from x import f 复制了引用）
+#   #        monkeypatch.setattr("services.generate_service.call_llm", fake)
+#
+# 测试金字塔：大量纯逻辑单元测试（快/稳）→ 少量接口测试（走 HTTP）
+# → 更少端到端。断言"稳定的不变量"，不硬编码会变的数据（如 total 总数）。
+# 铁律：测试必须幂等（每次跑结果一致）——用 uuid 造唯一数据，不依赖已有数据。
+# ═══════════════════════════════════════════════════════════
