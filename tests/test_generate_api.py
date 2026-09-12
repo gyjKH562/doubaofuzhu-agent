@@ -83,3 +83,10 @@ def test_改写id为0返回422(mock_llm, client):
     """边界：article_id=0 违反 RefineRequest 的 gt=0 校验。"""
     resp = client.post("/api/refine", json={"article_id": 0})
     assert resp.status_code == 422
+
+
+def test_生成接口topic超长返回422(mock_llm, client):
+    """边界：超长 topic 触发 GenerateRequest 的 max_length=120 校验。"""
+    long_topic = "长" * 121                    # 121 个"长"，超过上限 120
+    resp = client.post("/api/generate", json={"topic": long_topic})   # ① 填路径和字段名
+    assert resp.status_code == 422         # ② 填期望的状态码
