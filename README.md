@@ -1,7 +1,7 @@
 # 自媒体文案生成工具（后端）
 
 > 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 12 步）
-> ![pytest](https://img.shields.io/badge/pytest-31%20passed-brightgreen)
+> ![pytest](https://img.shields.io/badge/pytest-35%20passed-brightgreen)
 
 ## 开发说明
 
@@ -12,7 +12,7 @@
 基于 FastAPI 的文案生成工具后端：输入选题，生成公众号文章和小红书笔记。
 按"增量迭代"方式从零构建：每步只实现最小可用功能，先跑通原型再逐步加固。
 
-**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构 + 大模型调用能力（OpenAI SDK 异步封装：超时 / 重试 / 五级错误分类）+ 生成/改写接口串联（缓存优先）+ 复用之道的实践（save_row）+ 统一异常处理（业务异常集中定义 + 全局处理器 + 参数校验强化）+ 部署前加固（CORS / 限流 / 全局 500 兜底）+ pytest 自动化测试（单元测试 + 接口测试，31 个用例全绿）+ **Markdown 排版规范化**（纯函数文本清洗，接入生成/改写流程）。
+**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构 + 大模型调用能力（OpenAI SDK 异步封装：超时 / 重试 / 五级错误分类）+ 生成/改写接口串联（缓存优先）+ 复用之道的实践（save_row）+ 统一异常处理（业务异常集中定义 + 全局处理器 + 参数校验强化）+ 部署前加固（CORS / 限流 / 全局 500 兜底）+ pytest 自动化测试（单元测试 + 接口测试，35 个用例全绿）+ **文本规范化**（公众号走 Markdown 完整规则 / 小红书只清洗——纯函数，接入生成/改写流程）。
 **规划中**：异步任务队列（可选）。
 
 ## 技术栈
@@ -43,7 +43,7 @@
 - [x] 第 9 步：统一异常处理 + 参数校验强化（业务异常集中定义 / 全局处理器 / router 瘦身 / Path 校验）
 - [x] 第 10 步：部署前加固（CORS 跨域 / IP 限流 / 全局 500 兜底）
 - [x] 第 11 步：pytest 自动化测试（单元测试 + 接口测试 + 独立测试库 + mock 大模型）
-- [x] 第 12 步：Markdown 排版规范化（纯函数文本清洗 + 接入生成/改写流程）
+- [x] 第 12 步：文本规范化（公众号 Markdown 规则 / 小红书纯文本清洗，接入生成/改写流程）
 - [ ] 第 13 步：可选异步任务队列
 
 ## 快速开始
@@ -183,6 +183,8 @@ python -m pytest -v                   # 跑全部测试（25 个用例）
     测试往库写数据是常态，用开发库 = 测试数据污染真实数据、测试依赖历史数据无法幂等。独立测试库 `article_db_tutorial_test` 自动创建（`CREATE DATABASE IF NOT EXISTS`），create_all 只建表不建库——**建库和建表是两回事**。铁律：环境变量切换必须在 import 业务代码之前完成（database.py 在 import 时就读 DATABASE_URL）。
 24. **为什么"排版"做成纯函数而不是新接口？**
     谁消费这篇文章？——缓存、改写、展示。排版是"数据质量"问题，不是"对外能力"问题，所以做成 service 内部调用（生成/改写后自动规范化），而不是新开一个没人调的接口（YAGNI）。纯函数三件套：无副作用（同输入同输出）+ 确定性（最好测，输入输出表直接翻译成断言）+ 可复用（任何项目文本清洗直接拿去用）。附带决策：只清洗新数据、不动历史数据——避免破坏第 7 步的缓存逻辑（同一 topic 第二次应命中同一内容）。
+25. **同一个"规范化"，为什么拆成两个函数？——按业务语义抽象**
+    初版把公众号和小红书都走了 `normalize_markdown`，被评审质疑："小红书不渲染 Markdown，`#` 开头是话题标签不是标题"。修正：公众号用 `normalize_markdown`（清洗 + 标题前补空行），小红书用 `normalize_plain`（只清洗）。**教训：抽象要对齐业务语义，不能因为"都是文本清洗"就一刀切**——每个平台的内容形态不同，规则就不同；写代码前先问"这份数据在哪展示、规则是什么"。
 
 ## 配置项
 
@@ -251,7 +253,7 @@ doubaofuzhuAgent-tutorial/
 9. ✅ 统一异常处理：业务异常集中定义 + 全局处理器 + 参数校验强化（router 瘦身）
 10. ✅ 部署前加固：CORS 跨域 + IP 限流 + 全局 500 兜底
 11. ✅ pytest 自动化测试：单元测试（限流器 / 解析函数）+ 接口测试（CRUD / 生成 / 改写）+ 独立测试库 + mock 大模型
-12. ✅ Markdown 排版规范化：纯函数文本清洗（去行尾空白 / 压缩空行 / 标题前补空行）+ 接入生成/改写流程
+12. ✅ 文本规范化：公众号走 Markdown 完整规则（清洗 + 标题前补空行）/ 小红书只做纯文本清洗（# 开头是话题标签不是标题）
 13. ⬜ 可选：异步任务队列
 
 > 前端页面（HTML/JS）不在当前学习范围：现阶段聚焦后端，后续按需引入。
@@ -269,4 +271,4 @@ doubaofuzhuAgent-tutorial/
 - 2026-09-11：第 9 步完成——统一异常处理：新建 services/exceptions.py 集中定义业务异常（ArticleNotFoundError / ModelOutputError / DBError）；main.py 注册全局异常处理器（404/502/502/500 翻译收编一处）；db_helpers.save_row 失败改抛 DBError；generate_service/refine_service 解析失败改抛 ModelOutputError（专用异常替代裸 ValueError）；generate_router 删光全部 try/except（router 只剩业务调用）；article_router 的 _get_article_or_404 改抛领域异常（与 refine 域统一信号）+ 路径参数 Path(gt=0) 校验前置。实战踩坑两次：① 改代码不生效——服务没重启（uvicorn 默认无热重载，运行中的进程还是旧代码；铁证：响应文案还是第 8 步的"记录不存在"）；② list 接口 500 ResponseValidationError（input: None）——加 list() 包装时误删了 return 语句，函数返回 None 无法序列化；排障流程复盘：先看 traceback 最底部（异常类型 + 出错行），再复现代码逻辑，别凭感觉改；教训：复现要覆盖函数整体（签名到 return），不能只测片段。另掌握：假 key 测试验证 LLMError 全局转 502 未被吞成 500（router 删干净的运行证据）。
 - 2026-09-11：第 10 步完成——部署前加固三件套：① CORS（CORSMiddleware，白名单走 ALLOWED_ORIGINS 配置，开发 `*`，`allow_credentials=False` 避冲突，必须外层先 add）；② 限流（手写 FixedWindowLimiter 固定窗口：monotonic 时钟 + defaultdict 计数，每 IP 每分钟 30 次，超限 429；为什么必须限流——generate/refine 每次调用烧 token，被刷 = 烧钱）；③ 全局 500 兜底（exception_handler(Exception)：干净 JSON + logger.exception 完整留痕，"对外不说细节、对内不丢现场"）。实战验证：31 次连续请求，第 26 次就 429（因为之前测试已消耗额度）——证明限流是"窗口内累计计数"，不因换脚本重置；CORS 头实测 access-control-allow-origin: *。技术债记录：固定窗口边界突刺 / 单机内存限流多实例失效 / 代理后 client.host 失真（生产解析 X-Forwarded-For）→ 生产换 Redis/网关。
 - 2026-09-12：第 11 步完成——pytest 自动化测试（25 用例全绿，0.24s）：① 单元测试（限流器 4 例：正常/超限/独立计数/窗口重置，用 monkeypatch 换假时钟；解析函数 4 例：正常/缺分隔符/空内容/容错）；② 接口测试（CRUD 10 例 + 生成/改写 7 例，422/404/502 边界全覆盖）；③ 三个工程决策——测试库隔离（DATABASE_URL 指向 article_db_tutorial_test，自动建库，环境变量必须在 import 业务代码前设置）、client 夹具 scope="session"（踩坑修正：aiomysql 连接绑定事件循环，TestClient 每实例新建循环导致跨循环复用连接崩溃 "'NoneType' object has no attribute 'send'"）、mock 大模型（monkeypatch patch 到使用方模块而非源模块——from x import f 复制引用）；④ 测试幂等设计（uuid 随机 topic，断言稳定不变量如 total 是 int 而非具体值）。技术债：starlette 内部 DeprecationWarning（anyio BlockingPortal 别名，第三方库弃用，与我们代码无关）；可选增强：coverage 覆盖率报告、GitHub Actions CI（动态测试徽章）。**里程碑**：本人独立编写第一条测试（generate 接口超长 topic 边界用例），提交 d8f5652，贡献第 26 条用例。
-- 2026-09-12：第 12 步完成——Markdown 排版规范化：新建 services/markdown_service.py（纯函数 normalize_markdown，三条规则：去行尾空白 / 压缩连续空行 / 标题前补空行）；接入生成/改写流程（只清洗新数据，历史数据不动，避免破坏缓存）；配套 5 个单元测试（含幂等性、空串边界），全量 31 用例全绿。工程要点：纯函数 = 最好测（无副作用 + 确定性 + 可复用）；"排版做成内部处理而非新接口"——数据质量问题在数据入口解决（YAGNI）；insert 修改列表长度要跳过新插入元素（索引坑）。
+- 2026-09-12：第 12 步完成——文本规范化模块：新建 services/markdown_service.py，初版为 normalize_markdown（去行尾空白 / 压缩空行 / 标题前补空行三条规则），接入生成/改写流程，配套 5 个单元测试，31 用例全绿。**设计修正（用户评审发现）**：小红书不渲染 Markdown，`#` 开头是话题标签不是标题——不能套用"标题前补空行"规则。拆分为 normalize_markdown（公众号：清洗 + 标题规则）/ normalize_plain（小红书：只清洗），新增 4 个测试（关键断言：话题标签前不插空行），35 用例全绿。教训：抽象对齐业务语义（"都是文本清洗" ≠ "可以用同一套规则"）；PowerShell 参数解析坑（`cmd "a" + $var + "b"` 会把 `+` 当独立参数，导致写坏代码行——已修复）。

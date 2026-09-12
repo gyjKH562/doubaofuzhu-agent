@@ -17,7 +17,7 @@ from database import ArticleRecord                 # ORM 模型：对应 article
 from services.llm_service import LLMError, call_llm  # 第 6 步的封装：调模型 + 错误分类
 from services.db_helpers import save_row
 from services.exceptions import ModelOutputError
-from services.markdown_service import normalize_markdown  # 第 12 步：排版规范化
+from services.markdown_service import normalize_markdown, normalize_plain  # 第 12 步：排版规范化（公众号 Markdown / 小红书纯文本）
 
 logger = logging.getLogger(__name__)  # 本模块的日志器，__name__ = "services.generate_service"
 
@@ -112,8 +112,8 @@ async def generate_article(db: AsyncSession, topic: str) -> tuple[ArticleRecord,
 
     # 第 12 步：规范化排版（去行尾空白/压缩空行/标题前补空行）
     # 只处理新生成的数据；历史数据不动（避免破坏第 7 步的缓存逻辑）
-    gzh_article = normalize_markdown(gzh_article)
-    xhs_note = normalize_markdown(xhs_note)
+    gzh_article = normalize_markdown(gzh_article)  # 公众号：完整 Markdown 规则
+    xhs_note = normalize_plain(xhs_note)          # 小红书：只清洗（# 是话题标签不是标题）
 
     # ⑤ 写库（写库三部曲——第 3 次出现，第 8 步抽公共函数）
     db_row = ArticleRecord(               # 构造 ORM 对象（内存里，还没进数据库）
