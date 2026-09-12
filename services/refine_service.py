@@ -22,6 +22,7 @@ from services.db_helpers import save_row
 from services.generate_service import SEP_GZH, SEP_XHS, parse_generated
 from services.llm_service import LLMError, call_llm
 from services.exceptions import ArticleNotFoundError, ModelOutputError
+from services.markdown_service import normalize_markdown  # 第 12 步：排版规范化
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,10 @@ async def refine_article(
 
     # ④ 解析输出（复用生成接口的解析约定，两篇一起改）
     gzh_article, xhs_note = parse_generated(text)
+
+    # 第 12 步：规范化排版（与生成流程一致，改写的输出同样规范化）
+    gzh_article = normalize_markdown(gzh_article)
+    xhs_note = normalize_markdown(xhs_note)
 
     # ⑤ 更新 ORM 对象字段 + 统一写库（updated_at 由 onupdate 自动刷新）
     row.gzh_article = gzh_article
