@@ -24,7 +24,7 @@ load_dotenv()
 # 连接串从环境变量读，没配则用默认值兜底（本地开发）
 ASYNC_DB_URL = os.getenv(
     "DATABASE_URL",
-    "mysql+aiomysql://root:123456@127.0.0.1:3306/article_db?charset=utf8mb4",
+    "mysql+aiomysql://root:<your_password>@127.0.0.1:3306/article_db?charset=utf8mb4",
 )
 
 # ---------- 异步引擎：连接池的"总开关" ----------

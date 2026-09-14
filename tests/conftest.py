@@ -8,20 +8,39 @@ tests/conftest.py —— pytest 全局夹具（fixture）
    - client：启动真实 FastAPI 应用（含建表）的测试客户端
    - mock_llm：把大模型调用替换成假实现（测试不花钱、不依赖网络、可重复）
 
-⚠️ 文件顶部三行的顺序是命门：
-   os.environ 设置必须在 `from main import app` 之前——
+配置安全（第 1 步配置分离原则的延伸）：
+   测试连库的密码【不写死在代码里】——从 .env 读开发库连接串，
+   自动把库名替换成测试库。代码里永远不出现真实密码。
+
+⚠️ 文件顶部几行的顺序是命门：
+   加载 .env + 设置 DATABASE_URL 必须在 `from main import app` 之前——
    因为 database.py / main.py 在 import 时就读 DATABASE_URL。
    顺序反了，测试就会连到开发库（污染真实数据）。
 """
 import os  # 操作环境变量（先于业务代码）
 
-# ① 指向独立测试库（库不存在没关系，ensure_test_db 夹具会自动创建）
-TEST_DB_NAME = "article_db_tutorial_test"
-os.environ["DATABASE_URL"] = (
-    f"mysql+aiomysql://root:123456@127.0.0.1:3306/{TEST_DB_NAME}?charset=utf8mb4"
-)
+from dotenv import load_dotenv  # 加载 .env（拿到真实数据库密码）
 
-# ② 现在才允许 import 业务代码（此时 database.py 读到的是测试库地址）
+# ① 先加载 .env：密码只在这里出现一次，代码里零密码
+#    （load_dotenv 默认不覆盖已存在的环境变量，安全）
+load_dotenv()
+
+# ② 从 .env 读"开发库连接串"，把库名替换为独立测试库
+TEST_DB_NAME = "article_db_tutorial_test"
+DEV_DB_URL = os.getenv(  # 读开发库连接串（.env 里配的，含真实密码）
+    "DATABASE_URL",
+    "mysql+aiomysql://root:<your_password>@127.0.0.1:3306/article_db?charset=utf8mb4",
+)
+# 替换库名：.../article_db?charset=... → .../article_db_tutorial_test?charset=...
+base, _, query = DEV_DB_URL.partition("?")   # 拆出查询串（charset=utf8mb4）
+TEST_DB_URL = base.rsplit("/", 1)[0] + "/" + TEST_DB_NAME  # 换库名
+if query:
+    TEST_DB_URL += "?" + query               # 查询串原样拼回
+
+# ③ 设置环境变量（此后 import 的 database.py 会读到测试库地址）
+os.environ["DATABASE_URL"] = TEST_DB_URL
+
+# ④ 现在才允许 import 业务代码（此时 database.py 读到的是测试库地址）
 import asyncio  # 同步夹具里跑异步建库逻辑
 
 import pytest  # 测试框架
@@ -49,11 +68,10 @@ def ensure_test_db():
     执行 CREATE DATABASE IF NOT EXISTS 把库造出来。
     """
     async def _create() -> None:
-        # 连到 MySQL 服务器（不指定库），执行建库语句
-        engine = create_async_engine(
-            "mysql+aiomysql://root:123456@127.0.0.1:3306/",  # 无库名 = 连接服务器
-            pool_pre_ping=True,
-        )
+        # 连到 MySQL 服务器（不指定库）：从测试库地址去掉库名即可
+        # 密码跟着 TEST_DB_URL 走（来自 .env），代码里零密码
+        server_url = TEST_DB_URL.rsplit("/", 1)[0] + "/"
+        engine = create_async_engine(server_url, pool_pre_ping=True)
         async with engine.connect() as conn:
             # IF NOT EXISTS：库已存在就跳过（幂等，重复跑测试不报错）
             await conn.execute(

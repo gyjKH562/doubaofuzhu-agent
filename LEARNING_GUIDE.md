@@ -191,7 +191,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 ASYNC_DB_URL = os.getenv(
     "DATABASE_URL",
-    "mysql+aiomysql://root:123456@127.0.0.1:3306/article_db?charset=utf8mb4",
+    "mysql+aiomysql://root:<your_password>@127.0.0.1:3306/article_db?charset=utf8mb4",
 )
 
 # 异步引擎：连接池的"总开关"
@@ -989,7 +989,7 @@ import os  # 操作环境变量（先于业务代码）
 # ① 指向独立测试库（绝不污染开发库！）
 TEST_DB_NAME = "article_db_tutorial_test"
 os.environ["DATABASE_URL"] = (
-    f"mysql+aiomysql://root:123456@127.0.0.1:3306/{TEST_DB_NAME}?charset=utf8mb4"
+    f"mysql+aiomysql://root:<your_password>@127.0.0.1:3306/{TEST_DB_NAME}?charset=utf8mb4"
 )
 
 # ② 现在才允许 import 业务代码（此时 database.py 读到的是测试库地址）
@@ -1008,7 +1008,7 @@ main_module.rate_limiter.max_requests = 1_000_000
 def ensure_test_db():
     """确保测试库存在（create_all 只建表不建库，库要手动建）。"""
     async def _create() -> None:
-        engine = create_async_engine("mysql+aiomysql://root:123456@127.0.0.1:3306/")
+        engine = create_async_engine("mysql+aiomysql://root:<your_password>@127.0.0.1:3306/")
         async with engine.connect() as conn:
             await conn.execute(
                 text(f"CREATE DATABASE IF NOT EXISTS {TEST_DB_NAME} CHARACTER SET utf8mb4")
