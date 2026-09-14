@@ -19,6 +19,7 @@ from services.rate_limiter import FixedWindowLimiter       # 限流器
 from database import create_tables
 from routers.article_router import router as article_router
 from routers.generate_router import router as generate_router
+from routers.task_router import router as task_router
 from services.exceptions import ArticleNotFoundError, DBError, ModelOutputError
 from services.llm_service import LLMError
 
@@ -106,6 +107,7 @@ async def unhandled_exception_handler(request, exc: Exception):
 
 app.include_router(article_router)
 app.include_router(generate_router)
+app.include_router(task_router)
 
 @app.get("/health", summary="健康检查")
 async def health_check() -> dict:

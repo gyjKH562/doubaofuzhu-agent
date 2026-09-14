@@ -79,6 +79,24 @@ class ArticleRecord(Base):
     # 更新时间：插入时填当前时间，每次更新自动刷新
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
+class TaskRecord(Base):
+    """异步任务记录表：提交一个生成任务就插入一行（第 13 步）。
+
+    为什么需要这张表：异步任务 = 请求先返回 task_id，任务在后台跑，
+    客户端靠查这张表得知"做到哪一步了"（状态机）。
+    状态流转：pending（排队）→ running（执行中）→ done（成功）/ failed（失败）
+    """
+
+    __tablename__ = "task_record"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    topic: Mapped[str] = mapped_column(String(255))          # 要生成的选题
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # 任务状态（见 task_service 常量）
+    result: Mapped[str | None] = mapped_column(Text(), nullable=True)   # 成功结果（JSON 字符串）
+    error: Mapped[str | None] = mapped_column(Text(), nullable=True)    # 失败原因
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
 async def create_tables() -> None:
     """建表函数：启动时调用，已存在的表自动跳过（不删除、不动已有数据）。"""
     async with async_engine.begin() as conn:

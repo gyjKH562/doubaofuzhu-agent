@@ -31,6 +31,14 @@ from fastapi.testclient import TestClient  # FastAPI 官方测试客户端
 
 from main import app  # 被测应用（DATABASE_URL 已指向测试库）
 
+# ---- 测试专用：调大限流阈值 ----
+# 为什么：接口测试聚焦业务正确性，不能被业务限流（30 次/分钟）干扰——
+# 全量跑时轮询类测试请求多，会触发 429（响应没有 status 字段 → KeyError）。
+# 限流器本身的逻辑已由 tests/test_rate_limiter.py 的 4 个单元测试覆盖，
+# 这里旁路它符合"业务限制单独验证、接口测试不被干扰"的测试分层原则。
+import main as main_module
+main_module.rate_limiter.max_requests = 1_000_000  # 测试环境基本不触发
+
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_test_db():

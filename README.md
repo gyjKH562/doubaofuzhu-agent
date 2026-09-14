@@ -1,7 +1,7 @@
 # 自媒体文案生成工具（后端）
 
-> 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 12 步）
-> ![pytest](https://img.shields.io/badge/pytest-35%20passed-brightgreen)
+> 个人学习作品集项目 · 从 0 到 1 迭代构建中（当前进度：第 13 步完成 ✅）
+> ![pytest](https://img.shields.io/badge/pytest-41%20passed-brightgreen)
 
 ## 开发说明
 
@@ -12,8 +12,7 @@
 基于 FastAPI 的文案生成工具后端：输入选题，生成公众号文章和小红书笔记。
 按"增量迭代"方式从零构建：每步只实现最小可用功能，先跑通原型再逐步加固。
 
-**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构 + 大模型调用能力（OpenAI SDK 异步封装：超时 / 重试 / 五级错误分类）+ 生成/改写接口串联（缓存优先）+ 复用之道的实践（save_row）+ 统一异常处理（业务异常集中定义 + 全局处理器 + 参数校验强化）+ 部署前加固（CORS / 限流 / 全局 500 兜底）+ pytest 自动化测试（单元测试 + 接口测试，35 个用例全绿）+ **文本规范化**（公众号走 Markdown 完整规则 / 小红书只清洗——纯函数，接入生成/改写流程）。
-**规划中**：异步任务队列（可选）。
+**当前已落地**：服务骨架（配置分离 / 日志 / 健康检查）+ 数据库层（异步 ORM / 自动建表）+ 文章 CRUD 闭环（创建 / 查询 / 分页搜索 / 更新 / 删除）+ 路由分层重构 + 大模型调用能力（OpenAI SDK 异步封装：超时 / 重试 / 五级错误分类）+ 生成/改写接口串联（缓存优先）+ 复用之道的实践（save_row）+ 统一异常处理（业务异常集中定义 + 全局处理器 + 参数校验强化）+ 部署前加固（CORS / 限流 / 全局 500 兜底）+ pytest 自动化测试（单元测试 + 接口测试，41 个用例全绿）+ 文本规范化（公众号走 Markdown 完整规则 / 小红书只清洗）+ **异步任务队列**（提交即返回 task_id + 后台执行 + 轮询状态，零新依赖自实现）。
 
 ## 技术栈
 
@@ -127,6 +126,8 @@ python -m pytest -v                   # 跑全部测试（25 个用例）
 | DELETE | /api/article/{article_id} | 按 id 删除（成功返回 204 无内容） |
 | POST | /api/generate | 按选题生成公众号文章 + 小红书笔记：缓存命中 200 / 新生成 201 / 大模型失败 502 |
 | POST | /api/refine | 按指令改写指定文章：成功 200 / 文章不存在 404 / 大模型失败 502 |
+| POST | /api/tasks | 提交异步生成任务：202 立即返回 task_id（生成在后台执行） |
+| GET | /api/tasks/{task_id} | 轮询任务状态：pending/running/done/failed；不存在 404；id≤0 422 |
 
 > 第 9 步起，404/422/502/500 的错误翻译统一由全局异常处理器负责（router 只抛异常、不翻译）。
 > 第 10 步起，任意接口超限流返回 429；未知异常统一 500 JSON（不泄漏内部细节）。
@@ -185,6 +186,10 @@ python -m pytest -v                   # 跑全部测试（25 个用例）
     谁消费这篇文章？——缓存、改写、展示。排版是"数据质量"问题，不是"对外能力"问题，所以做成 service 内部调用（生成/改写后自动规范化），而不是新开一个没人调的接口（YAGNI）。纯函数三件套：无副作用（同输入同输出）+ 确定性（最好测，输入输出表直接翻译成断言）+ 可复用（任何项目文本清洗直接拿去用）。附带决策：只清洗新数据、不动历史数据——避免破坏第 7 步的缓存逻辑（同一 topic 第二次应命中同一内容）。
 25. **同一个"规范化"，为什么拆成两个函数？——按业务语义抽象**
     初版把公众号和小红书都走了 `normalize_markdown`，被评审质疑："小红书不渲染 Markdown，`#` 开头是话题标签不是标题"。修正：公众号用 `normalize_markdown`（清洗 + 标题前补空行），小红书用 `normalize_plain`（只清洗）。**教训：抽象要对齐业务语义，不能因为"都是文本清洗"就一刀切**——每个平台的内容形态不同，规则就不同；写代码前先问"这份数据在哪展示、规则是什么"。
+26. **异步任务为什么自实现，而不是 Celery？——YAGNI 的规模判断**
+    耗时操作（大模型 30~120 秒）不该让请求同步等待。方案权衡：Celery+Redis（工业标准，但要装 Redis、起 worker、学习曲线陡）/ ARQ（仍需 Redis）/ **自实现"任务表 + asyncio.create_task"（零新依赖，单进程足够）**。选第三个——核心机制（任务表 + 状态机 + 后台执行 + 轮询）完全一致，规模上来再换。三个铁律：① 后台协程必须自己 catch 异常写进任务状态（后台异常没人接，不捕获就永远卡 running）；② 后台任务自开数据库会话（请求的会话响应后即关闭）；③ 202 = "已受理"，不是 201（完成）/ 200（同步完成）。局限诚实记录：单进程内存调度，重启丢任务、多实例失效——生产换 Celery/ARQ + Redis。
+27. **为什么接口测试要旁路业务限流？——测试分层**
+    全量跑时任务轮询测试被 429 打挂（响应没有 status 字段 → KeyError），排查发现是业务限流（30 次/分钟）在测试环境也生效。修正：conftest 把限流阈值调大。原则：**业务限制单独验证（限流器 4 个单元测试）、接口测试专注业务正确性**——测试环境旁路"环境敏感的限制"，但被旁路的逻辑必须有独立测试覆盖。
 
 ## 配置项
 
@@ -207,7 +212,8 @@ doubaofuzhuAgent-tutorial/
 ├── routers/
 │   ├── __init__.py        # 包标记
 │   ├── article_router.py  # 文章域 CRUD 接口（APIRouter 组织，含 Path 参数校验）
-│   └── generate_router.py # AI 域接口（POST /api/generate + /api/refine，薄 router 只剩业务调用）
+│   ├── generate_router.py # AI 域接口（POST /api/generate + /api/refine，薄 router 只剩业务调用）
+│   └── task_router.py     # 异步任务接口（POST /api/tasks 提交 + GET /api/tasks/{id} 轮询，第 13 步）
 ├── services/
 │   ├── __init__.py        # 包标记
 │   ├── exceptions.py      # 业务异常集中定义（ArticleNotFoundError / ModelOutputError / DBError）
@@ -215,11 +221,13 @@ doubaofuzhuAgent-tutorial/
 │   ├── db_helpers.py      # 数据库操作公共函数（save_row 写库统一入口，失败抛 DBError）
 │   ├── llm_service.py     # 大模型调用服务（AsyncOpenAI 单例 + call_llm + 错误分类）
 │   ├── generate_service.py # 生成业务编排（缓存优先 + 解析 + 规范化 + 写库）
-│   └── refine_service.py  # 改写业务编排（查记录 + 拼改写 prompt + 复用解析/规范化/写库）
-│   └── markdown_service.py # Markdown 排版规范化（纯函数文本清洗，第 12 步）
+│   ├── refine_service.py  # 改写业务编排（查记录 + 拼改写 prompt + 复用解析/规范化/写库）
+│   ├── markdown_service.py # 文本规范化（公众号 Markdown 规则 / 小红书纯文本清洗，第 12 步）
+│   └── task_service.py    # 异步任务核心（任务状态机 + 后台执行 + 结果序列化，第 13 步）
 ├── schemas/
 │   ├── __init__.py        # 包标记
-│   └── article_schemas.py # 请求/响应模型（Create/Resp/ListResp/Update/Generate/Refine）
+│   ├── article_schemas.py # 请求/响应模型（Create/Resp/ListResp/Update/Generate/Refine）
+│   └── task_schemas.py    # 任务响应模型（TaskResp，第 13 步）
 ├── scripts/
 │   ├── test_llm.py        # 手动验证脚本：大模型调用链路（非 pytest）
 │   └── test_api.py        # 通用 API 测试脚本（交互输入 JSON，绕开 PowerShell 引号坑）
@@ -229,7 +237,8 @@ doubaofuzhuAgent-tutorial/
 │   ├── test_generate_service.py  # 模型输出解析函数单元测试
 │   ├── test_markdown_service.py  # Markdown 规范化单元测试（第 12 步）
 │   ├── test_article_api.py       # 文章 CRUD 接口测试（422/404 边界全覆盖）
-│   └── test_generate_api.py      # 生成/改写接口测试（mock 大模型 + 缓存 + 502）
+│   ├── test_generate_api.py      # 生成/改写接口测试（mock 大模型 + 缓存 + 502）
+│   └── test_task_api.py          # 异步任务接口测试（202 + 轮询 + 缓存联动 + 失败态，第 13 步）
 ├── pytest.ini            # pytest 配置（testpaths + pythonpath）
 ├── requirements.txt       # 运行依赖（版本锁定）
 ├── requirements-dev.txt   # 开发依赖（测试用：-r requirements.txt + pytest + httpx）
@@ -254,7 +263,7 @@ doubaofuzhuAgent-tutorial/
 10. ✅ 部署前加固：CORS 跨域 + IP 限流 + 全局 500 兜底
 11. ✅ pytest 自动化测试：单元测试（限流器 / 解析函数）+ 接口测试（CRUD / 生成 / 改写）+ 独立测试库 + mock 大模型
 12. ✅ 文本规范化：公众号走 Markdown 完整规则（清洗 + 标题前补空行）/ 小红书只做纯文本清洗（# 开头是话题标签不是标题）
-13. ⬜ 可选：异步任务队列
+13. ✅ 异步任务队列：任务表 + asyncio.create_task 自实现（提交即返回 task_id，后台执行，轮询状态）——13 步全部完成 🎉
 
 > 前端页面（HTML/JS）不在当前学习范围：现阶段聚焦后端，后续按需引入。
 
@@ -271,4 +280,4 @@ doubaofuzhuAgent-tutorial/
 - 2026-09-11：第 9 步完成——统一异常处理：新建 services/exceptions.py 集中定义业务异常（ArticleNotFoundError / ModelOutputError / DBError）；main.py 注册全局异常处理器（404/502/502/500 翻译收编一处）；db_helpers.save_row 失败改抛 DBError；generate_service/refine_service 解析失败改抛 ModelOutputError（专用异常替代裸 ValueError）；generate_router 删光全部 try/except（router 只剩业务调用）；article_router 的 _get_article_or_404 改抛领域异常（与 refine 域统一信号）+ 路径参数 Path(gt=0) 校验前置。实战踩坑两次：① 改代码不生效——服务没重启（uvicorn 默认无热重载，运行中的进程还是旧代码；铁证：响应文案还是第 8 步的"记录不存在"）；② list 接口 500 ResponseValidationError（input: None）——加 list() 包装时误删了 return 语句，函数返回 None 无法序列化；排障流程复盘：先看 traceback 最底部（异常类型 + 出错行），再复现代码逻辑，别凭感觉改；教训：复现要覆盖函数整体（签名到 return），不能只测片段。另掌握：假 key 测试验证 LLMError 全局转 502 未被吞成 500（router 删干净的运行证据）。
 - 2026-09-11：第 10 步完成——部署前加固三件套：① CORS（CORSMiddleware，白名单走 ALLOWED_ORIGINS 配置，开发 `*`，`allow_credentials=False` 避冲突，必须外层先 add）；② 限流（手写 FixedWindowLimiter 固定窗口：monotonic 时钟 + defaultdict 计数，每 IP 每分钟 30 次，超限 429；为什么必须限流——generate/refine 每次调用烧 token，被刷 = 烧钱）；③ 全局 500 兜底（exception_handler(Exception)：干净 JSON + logger.exception 完整留痕，"对外不说细节、对内不丢现场"）。实战验证：31 次连续请求，第 26 次就 429（因为之前测试已消耗额度）——证明限流是"窗口内累计计数"，不因换脚本重置；CORS 头实测 access-control-allow-origin: *。技术债记录：固定窗口边界突刺 / 单机内存限流多实例失效 / 代理后 client.host 失真（生产解析 X-Forwarded-For）→ 生产换 Redis/网关。
 - 2026-09-12：第 11 步完成——pytest 自动化测试（25 用例全绿，0.24s）：① 单元测试（限流器 4 例：正常/超限/独立计数/窗口重置，用 monkeypatch 换假时钟；解析函数 4 例：正常/缺分隔符/空内容/容错）；② 接口测试（CRUD 10 例 + 生成/改写 7 例，422/404/502 边界全覆盖）；③ 三个工程决策——测试库隔离（DATABASE_URL 指向 article_db_tutorial_test，自动建库，环境变量必须在 import 业务代码前设置）、client 夹具 scope="session"（踩坑修正：aiomysql 连接绑定事件循环，TestClient 每实例新建循环导致跨循环复用连接崩溃 "'NoneType' object has no attribute 'send'"）、mock 大模型（monkeypatch patch 到使用方模块而非源模块——from x import f 复制引用）；④ 测试幂等设计（uuid 随机 topic，断言稳定不变量如 total 是 int 而非具体值）。技术债：starlette 内部 DeprecationWarning（anyio BlockingPortal 别名，第三方库弃用，与我们代码无关）；可选增强：coverage 覆盖率报告、GitHub Actions CI（动态测试徽章）。**里程碑**：本人独立编写第一条测试（generate 接口超长 topic 边界用例），提交 d8f5652，贡献第 26 条用例。
-- 2026-09-12：第 12 步完成——文本规范化模块：新建 services/markdown_service.py，初版为 normalize_markdown（去行尾空白 / 压缩空行 / 标题前补空行三条规则），接入生成/改写流程，配套 5 个单元测试，31 用例全绿。**设计修正（用户评审发现）**：小红书不渲染 Markdown，`#` 开头是话题标签不是标题——不能套用"标题前补空行"规则。拆分为 normalize_markdown（公众号：清洗 + 标题规则）/ normalize_plain（小红书：只清洗），新增 4 个测试（关键断言：话题标签前不插空行），35 用例全绿。教训：抽象对齐业务语义（"都是文本清洗" ≠ "可以用同一套规则"）；PowerShell 参数解析坑（`cmd "a" + $var + "b"` 会把 `+` 当独立参数，导致写坏代码行——已修复）。
+- 2026-09-14：第 13 步完成——异步任务队列（**13 步路线图收官** 🎉）：自实现"任务表 + asyncio.create_task"（零新依赖，否决 Celery/ARQ 因需 Redis 过重——YAGNI）。新增 task_record 表（状态机 pending→running→done/failed）、services/task_service.py（create_task_record / run_task 后台执行 / task_to_resp 序列化）、routers/task_router.py（POST /api/tasks 提交 → 202 立即返回 task_id；GET /api/tasks/{id} 轮询状态）、schemas/task_schemas.py（TaskResp）；后台执行完全复用 generate_article（含缓存联动——同 topic 第二次任务 is_cached=True）。6 个新测试：202 提交 / 轮询到 done 且结果完整 / 缓存联动 / 任务不存在 404 / id=0 422 / 大模型故障任务标记 failed（后台异常被捕获写进任务，不卡 running）。**实战排障**：全量跑 4 个任务测试失败（KeyError: 'status'）而单独跑全过——排查出是业务限流（30 次/分钟）在测试环境生效，轮询请求触发 429（响应无 status 字段）；修正：conftest 旁路限流（调大阈值），限流逻辑本身已有 4 个单元测试覆盖。技术债诚实记录：单进程内存调度（重启丢任务、多实例失效）→ 生产换 Celery/ARQ + Redis。41 用例全绿。

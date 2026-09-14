@@ -745,3 +745,52 @@ async def list_items(
 # 4. 规则保持 3~4 条，够用即止（YAGNI）；模型输出格式变了规则要跟着调
 # 5. 幂等性测试：normalize(normalize(x)) == normalize(x)（重复处理结果不变）
 # ═══════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════
+# 模板 Z：异步任务队列 —— "提交即返回 + 后台执行 + 轮询状态"
+# 适用：任何"耗时操作"（大模型调用、发邮件、批量处理）不该让请求同步等待
+# ═══════════════════════════════════════════════════════════
+#   # 1. 任务表（database.py）：status 状态机 + result/error 列
+#   class TaskRecord(Base):
+#       __tablename__ = "task_record"
+#       id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+#       topic: Mapped[str] = mapped_column(String(255))
+#       status: Mapped[str] = mapped_column(String(20), default="pending")
+#       result: Mapped[str | None] = mapped_column(Text(), nullable=True)  # JSON 字符串
+#       error: Mapped[str | None] = mapped_column(Text(), nullable=True)
+#       created_at / updated_at
+#
+#   # 2. 提交接口（router）：建任务记录 + 启动后台协程，立即返回 202
+#   @router.post("/tasks", status_code=202)
+#   async def create_task(req: Req, db: AsyncSession = Depends(get_db)):
+#       task = await create_task_record(db, req.topic)   # 状态 pending
+#       asyncio.create_task(run_task(task.id))           # 后台执行，不 await
+#       return task_to_resp(task)
+#
+#   # 3. 后台执行（service）：必须自己开数据库会话！
+#   async def run_task(task_id: int) -> None:
+#       async with AsyncSessionLocal() as db:            # ⚠ 不能用请求的会话
+#           task = await db.get(TaskRecord, task_id)
+#           task.status = "running"; await db.commit()
+#           try:
+#               ...业务逻辑...                            # 复用现有 service
+#               task.status = "done"
+#               task.result = json.dumps({...}, ensure_ascii=False)
+#           except Exception as e:                       # ⚠ 必须捕获：后台异常没人接
+#               task.status = "failed"; task.error = str(e)[:500]
+#           await db.commit()
+#
+#   # 4. 查询接口：客户端轮询 status，done 时取 result
+#   @router.get("/tasks/{task_id}")
+#   async def get_task(task_id: int = Path(..., gt=0), db=Depends(get_db)):
+#       task = await db.get(TaskRecord, task_id)
+#       if task is None: raise TaskNotFoundError(...)
+#       return task_to_resp(task)
+#
+# 铁律1：后台协程异常必须自己捕获写进任务状态（否则永远卡 running）
+# 铁律2：后台任务自开会话（请求会话响应后即关闭）
+# 铁律3：202 = 已受理（非 201 完成 / 非 200 同步完成）
+# 局限：单进程内存调度（重启丢任务、多实例失效）→ 生产换 Celery/ARQ + Redis
+# 测试要点：接口测试轮询等待 + 测试环境旁路业务限流（限流逻辑单独单测）
+# ═══════════════════════════════════════════════════════════
